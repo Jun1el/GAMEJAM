@@ -1,0 +1,30 @@
+# Entornos y paquetes locales
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editores y sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Configuración local y secretos
+.env
+.env.*
+!.env.example
+
+# Herramientas descargadas localmente
+.tools/
+
+# Metadatos locales de asistentes
+.agents/
+skills-lock.json
