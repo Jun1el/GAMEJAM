@@ -19,9 +19,15 @@ from network import DEFAULT_HOST, DEFAULT_PORT, Network, NetworkError
 FPS = 30
 HUD_HEIGHT = 150
 PLAYER_SIZE = 20
+START_WIDTH = 900
+START_HEIGHT = 600
 
 COLORS = {
     "background": (13, 20, 32),
+    "background_light": (21, 35, 55),
+    "uni_blue": (0, 83, 155),
+    "uni_blue_light": (20, 135, 210),
+    "accent": (255, 196, 61),
     "wall": (35, 48, 67),
     "wall_edge": (52, 71, 96),
     "floor": (208, 218, 225),
@@ -32,6 +38,8 @@ COLORS = {
     "text": (238, 242, 245),
     "muted": (164, 174, 186),
     "hud": (18, 27, 42),
+    "panel": (22, 34, 52),
+    "input": (12, 24, 40),
 }
 
 
@@ -47,7 +55,7 @@ class GameClient:
         self.player_id: int | None = None
         self.tilemap: list[list[int]] = []
         self.tile_size = 32
-        self.repair_window = (0.0, 10.0)
+        self.repair_window = (0.0, 30.0)
         self.state: dict[str, Any] = {}
         self.last_event_id = 0
         self.status_message = "Conectando..."
@@ -56,11 +64,177 @@ class GameClient:
 
         pygame.init()
         pygame.display.set_caption("La vida da vueltas en Eduroam")
-        self.screen: pygame.Surface | None = None
+        self.screen: pygame.Surface | None = pygame.display.set_mode(
+            (START_WIDTH, START_HEIGHT)
+        )
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("consolas", 16)
         self.small_font = pygame.font.SysFont("consolas", 11)
         self.title_font = pygame.font.SysFont("consolas", 20, bold=True)
+        self.menu_title_font = pygame.font.SysFont("arial", 42, bold=True)
+        self.menu_subtitle_font = pygame.font.SysFont("arial", 22, bold=True)
+        self.menu_font = pygame.font.SysFont("arial", 18)
+
+    def _draw_signal(self, center: tuple[int, int], pulse: float) -> None:
+        """Dibuja una señal Wi-Fi animada para la portada."""
+        assert self.screen is not None
+        for index, radius in enumerate((42, 72, 102)):
+            alpha = max(45, 150 - index * 25)
+            layer = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.arc(
+                layer,
+                (*COLORS["uni_blue_light"], alpha),
+                layer.get_rect().inflate(-8, -8),
+                0.15 + pulse,
+                2.99 + pulse,
+                6,
+            )
+            self.screen.blit(layer, layer.get_rect(center=center))
+        pygame.draw.circle(self.screen, COLORS["accent"], center, 9)
+
+    def _draw_start_screen(
+        self, name_active: bool, play_hovered: bool, pulse: float
+    ) -> tuple[pygame.Rect, pygame.Rect]:
+        assert self.screen is not None
+        self.screen.fill(COLORS["background"])
+
+        for y in range(0, START_HEIGHT, 40):
+            shade = 18 + y // 45
+            pygame.draw.line(
+                self.screen,
+                (shade, shade + 9, shade + 20),
+                (0, y),
+                (START_WIDTH, y),
+            )
+
+        self._draw_signal((755, 112), pulse)
+        pygame.draw.rect(
+            self.screen,
+            COLORS["uni_blue"],
+            pygame.Rect(0, 0, 12, START_HEIGHT),
+        )
+
+        uni = self.menu_subtitle_font.render(
+            "UNIVERSIDAD NACIONAL DE INGENIERÍA", True, COLORS["uni_blue_light"]
+        )
+        self.screen.blit(uni, (55, 45))
+
+        title = self.menu_title_font.render(
+            "LA VIDA DA VUELTAS", True, COLORS["text"]
+        )
+        self.screen.blit(title, (55, 88))
+        eduroam = self.menu_title_font.render("EN EDUROAM", True, COLORS["accent"])
+        self.screen.blit(eduroam, (55, 137))
+
+        problem = (
+            "La conexión Eduroam está fallando en distintos puntos del campus. "
+            "Recorre la UNI, sincroniza los routers y mantén la red funcionando."
+        )
+        words = problem.split()
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if self.menu_font.size(candidate)[0] > 690:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        lines.append(current)
+        for index, line in enumerate(lines):
+            rendered = self.menu_font.render(line, True, COLORS["muted"])
+            self.screen.blit(rendered, (57, 205 + index * 25))
+
+        panel = pygame.Rect(55, 295, 790, 130)
+        pygame.draw.rect(self.screen, COLORS["panel"], panel, border_radius=14)
+        pygame.draw.rect(
+            self.screen, COLORS["background_light"], panel, 2, border_radius=14
+        )
+        mission = self.menu_subtitle_font.render(
+            "TU MISIÓN", True, COLORS["accent"]
+        )
+        self.screen.blit(mission, (75, 315))
+        instructions = [
+            "WASD / Flechas  ·  Muévete por el campus",
+            "Acércate a un router rojo  ·  Espera a que se vuelva amarillo",
+            "Pulsa E  ·  Repara la conexión antes de que el indicador siga girando",
+        ]
+        for index, text in enumerate(instructions):
+            rendered = self.menu_font.render(text, True, COLORS["text"])
+            self.screen.blit(rendered, (75, 350 + index * 25))
+
+        name_label = self.font.render("NOMBRE DEL JUGADOR", True, COLORS["muted"])
+        self.screen.blit(name_label, (55, 458))
+        name_rect = pygame.Rect(55, 482, 500, 52)
+        pygame.draw.rect(self.screen, COLORS["input"], name_rect, border_radius=9)
+        pygame.draw.rect(
+            self.screen,
+            COLORS["uni_blue_light"] if name_active else COLORS["wall_edge"],
+            name_rect,
+            2,
+            border_radius=9,
+        )
+        display_name = self.name or "Escribe tu nombre"
+        name_color = COLORS["text"] if self.name else COLORS["muted"]
+        self.screen.blit(
+            self.menu_font.render(display_name, True, name_color),
+            (name_rect.x + 15, name_rect.y + 15),
+        )
+
+        play_rect = pygame.Rect(585, 482, 260, 52)
+        button_color = (
+            COLORS["uni_blue_light"] if play_hovered else COLORS["uni_blue"]
+        )
+        pygame.draw.rect(self.screen, button_color, play_rect, border_radius=9)
+        play = self.menu_subtitle_font.render(
+            "CONECTAR A EDUROAM", True, COLORS["text"]
+        )
+        self.screen.blit(play, play.get_rect(center=play_rect.center))
+
+        footer = self.small_font.render(
+            "Hasta 4 jugadores  ·  Servidor autoritativo  ·  ESC para salir",
+            True,
+            COLORS["muted"],
+        )
+        self.screen.blit(footer, footer.get_rect(center=(START_WIDTH // 2, 570)))
+        return name_rect, play_rect
+
+    def show_start_screen(self) -> bool:
+        """Muestra la portada y devuelve True cuando el jugador decide entrar."""
+        name_active = False
+        elapsed = 0.0
+
+        while True:
+            mouse_position = pygame.mouse.get_pos()
+            play_hovered = pygame.Rect(585, 482, 260, 52).collidepoint(
+                mouse_position
+            )
+            name_rect, play_rect = self._draw_start_screen(
+                name_active, play_hovered, elapsed
+            )
+            pygame.display.flip()
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return False
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        return False
+                    if event.key == pygame.K_RETURN and self.name.strip():
+                        self.name = self.name.strip()
+                        return True
+                    if name_active:
+                        if event.key == pygame.K_BACKSPACE:
+                            self.name = self.name[:-1]
+                        elif event.unicode.isprintable() and len(self.name) < 20:
+                            self.name += event.unicode
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    name_active = name_rect.collidepoint(event.pos)
+                    if play_rect.collidepoint(event.pos) and self.name.strip():
+                        self.name = self.name.strip()
+                        return True
+
+            elapsed += self.clock.tick(FPS) / 1000.0
 
     def _next_request_id(self) -> str:
         self.request_counter += 1
@@ -245,6 +419,8 @@ class GameClient:
             )
 
     def run(self) -> None:
+        if not self.show_start_screen():
+            return
         self.connect()
         running = True
         while running:

@@ -24,11 +24,15 @@ Los routers representan estos lugares:
 | Intentar reparar | `E` |
 | Salir | `Esc` o cerrar la ventana |
 
+Al abrir el cliente aparece una pantalla de inicio. Escribe o modifica el
+nombre del jugador y pulsa **Conectar a Eduroam** para entrar a la partida.
+
 ## Cómo reparar un router
 
 1. Busca un router rojo y acércate hasta quedar junto a él.
 2. Observa la línea que gira dentro del router.
-3. Cuando el router se vuelva amarillo, pulsa `E`.
+3. Cuando el router se vuelva amarillo, pulsa `E`. La ventana amarilla dura
+   aproximadamente un tercio de segundo.
 4. Si pulsaste dentro del intervalo correcto, el router se volverá verde y
    sumarás una reparación.
 
@@ -137,4 +141,3 @@ Get-CimInstance Win32_Process |
 - `server.py`: estado autoritativo, colisiones, routers y Karma.
 - `client.py`: interfaz, controles y renderizado con Pygame.
 - `test_network.py` y `test_server.py`: pruebas automatizadas.
-

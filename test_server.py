@@ -46,6 +46,19 @@ class GameStateTests(unittest.TestCase):
         self.assertTrue(router.repaired)
         self.assertEqual(player.repairs, 1)
 
+    def test_rejects_repair_just_outside_larger_window(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        router = next(iter(self.game.routers.values()))
+        router.rotation = REPAIR_MAX_ANGLE + 0.1
+        player.x = router.col * TILE_SIZE - PLAYER_SIZE
+        player.y = router.row * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2
+
+        success, _ = self.game.interact(player.player_id)
+
+        self.assertFalse(success)
+        self.assertFalse(router.repaired)
+
     def test_zero_sum_cycle_breaks_one_at_capacity(self) -> None:
         player = self.game.add_player("Ada")
         assert player is not None
