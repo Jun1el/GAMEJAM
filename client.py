@@ -17,7 +17,7 @@ from network import DEFAULT_HOST, DEFAULT_PORT, Network, NetworkError
 
 
 FPS = 30
-HUD_HEIGHT = 150
+HUD_HEIGHT = 205
 PLAYER_SIZE = 20
 START_WIDTH = 900
 START_HEIGHT = 600
@@ -40,6 +40,8 @@ COLORS = {
     "hud": (18, 27, 42),
     "panel": (22, 34, 52),
     "input": (12, 24, 40),
+    "victory": (39, 174, 96),
+    "defeat": (231, 76, 60),
 }
 
 
@@ -55,7 +57,7 @@ class GameClient:
         self.player_id: int | None = None
         self.tilemap: list[list[int]] = []
         self.tile_size = 32
-        self.repair_window = (0.0, 30.0)
+        self.repair_window = (0.0, 90.0)
         self.state: dict[str, Any] = {}
         self.last_event_id = 0
         self.status_message = "Conectando..."
@@ -201,7 +203,7 @@ class GameClient:
 
     def show_start_screen(self) -> bool:
         """Muestra la portada y devuelve True cuando el jugador decide entrar."""
-        name_active = False
+        name_active = True
         elapsed = 0.0
 
         while True:
@@ -314,6 +316,7 @@ class GameClient:
     def _draw_routers(self) -> None:
         assert self.screen is not None
         minimum, maximum = self.repair_window
+        target_router = self.state.get("mission", {}).get("target_router")
         for router in self.state.get("routers", {}).values():
             center = (
                 int((router["col"] + 0.5) * self.tile_size),
@@ -329,6 +332,15 @@ class GameClient:
                 color = COLORS["router_down"]
 
             radius = max(7, self.tile_size // 3)
+            if router["id"] == target_router:
+                pulse = 3 + int((pygame.time.get_ticks() / 180) % 4)
+                pygame.draw.circle(
+                    self.screen,
+                    COLORS["accent"],
+                    center,
+                    radius + pulse + 4,
+                    3,
+                )
             pygame.draw.circle(self.screen, color, center, radius)
             pygame.draw.circle(self.screen, COLORS["background"], center, radius, 2)
             direction = pygame.Vector2(radius - 2, 0).rotate(-rotation)
@@ -371,6 +383,42 @@ class GameClient:
         )
         self.screen.blit(title, (14, map_height + 10))
 
+        mission = self.state.get("mission", {})
+        mission_title = (
+            f"MISIÓN {mission.get('number', 1)}/{mission.get('total', 4)}: "
+            f"{mission.get('title', 'Preparando campaña')}"
+        )
+        self.screen.blit(
+            self.font.render(mission_title, True, COLORS["accent"]),
+            (14, map_height + 38),
+        )
+        self.screen.blit(
+            self.small_font.render(
+                mission.get("description", ""), True, COLORS["text"]
+            ),
+            (14, map_height + 61),
+        )
+
+        progress = float(mission.get("progress", 0))
+        goal = float(mission.get("goal", 1))
+        time_remaining = float(mission.get("time_remaining", 0))
+        bar_rect = pygame.Rect(14, map_height + 82, 360, 14)
+        pygame.draw.rect(self.screen, COLORS["input"], bar_rect, border_radius=7)
+        fill_width = int(bar_rect.width * min(1.0, progress / max(1.0, goal)))
+        if fill_width:
+            pygame.draw.rect(
+                self.screen,
+                COLORS["uni_blue_light"],
+                pygame.Rect(bar_rect.x, bar_rect.y, fill_width, bar_rect.height),
+                border_radius=7,
+            )
+        progress_text = self.small_font.render(
+            f"Progreso: {progress:g}/{goal:g}  ·  Tiempo: {time_remaining:.1f}s",
+            True,
+            COLORS["muted"],
+        )
+        self.screen.blit(progress_text, (385, map_height + 82))
+
         karma = self.state.get("karma_in", 0)
         repaired = sum(
             1 for router in self.state.get("routers", {}).values() if router["repaired"]
@@ -381,7 +429,7 @@ class GameClient:
             True,
             COLORS["muted"],
         )
-        self.screen.blit(info, (14, map_height + 38))
+        self.screen.blit(info, (14, map_height + 107))
 
         players = sorted(
             self.state.get("players", {}).values(),
@@ -398,7 +446,7 @@ class GameClient:
         )
         self.screen.blit(
             self.font.render(scoreboard, True, COLORS["text"]),
-            (14, map_height + 66),
+            (14, map_height + 132),
         )
 
         events = self.state.get("events", [])
@@ -409,14 +457,66 @@ class GameClient:
             event_text = newest["text"]
             self.screen.blit(
                 self.font.render(event_text, True, COLORS["router_ready"]),
-                (14, map_height + 94),
+                (14, map_height + 157),
             )
 
         if pygame.time.get_ticks() < self.status_until:
             self.screen.blit(
                 self.font.render(self.status_message, True, COLORS["text"]),
-                (14, map_height + 120),
+                (14, map_height + 181),
             )
+
+    def _end_button_rects(self) -> tuple[pygame.Rect, pygame.Rect]:
+        assert self.screen is not None
+        center_x = self.screen.get_width() // 2
+        center_y = self.screen.get_height() // 2
+        return (
+            pygame.Rect(center_x - 225, center_y + 82, 210, 52),
+            pygame.Rect(center_x + 15, center_y + 82, 210, 52),
+        )
+
+    def _draw_end_overlay(self) -> None:
+        assert self.screen is not None
+        status = self.state.get("game_status")
+        if status not in {"victory", "defeat"}:
+            return
+
+        overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        overlay.fill((5, 10, 18, 215))
+        self.screen.blit(overlay, (0, 0))
+
+        center_x = self.screen.get_width() // 2
+        center_y = self.screen.get_height() // 2
+        victory = status == "victory"
+        color = COLORS["victory"] if victory else COLORS["defeat"]
+        heading = "¡EDUROAM ESTABILIZADO!" if victory else "CONEXIÓN PERDIDA"
+        title = self.menu_title_font.render(heading, True, color)
+        self.screen.blit(title, title.get_rect(center=(center_x, center_y - 95)))
+
+        result = self.menu_font.render(
+            self.state.get("result_message", ""), True, COLORS["text"]
+        )
+        self.screen.blit(result, result.get_rect(center=(center_x, center_y - 35)))
+
+        subtitle = self.font.render(
+            "El equipo puede reiniciar la campaña o salir del juego.",
+            True,
+            COLORS["muted"],
+        )
+        self.screen.blit(subtitle, subtitle.get_rect(center=(center_x, center_y + 5)))
+
+        restart_rect, exit_rect = self._end_button_rects()
+        mouse = pygame.mouse.get_pos()
+        for rect, label, base_color in (
+            (restart_rect, "REINICIAR [R]", COLORS["uni_blue"]),
+            (exit_rect, "SALIR [ESC]", COLORS["wall"]),
+        ):
+            draw_color = (
+                COLORS["uni_blue_light"] if rect.collidepoint(mouse) else base_color
+            )
+            pygame.draw.rect(self.screen, draw_color, rect, border_radius=9)
+            text = self.menu_subtitle_font.render(label, True, COLORS["text"])
+            self.screen.blit(text, text.get_rect(center=rect.center))
 
     def run(self) -> None:
         if not self.show_start_screen():
@@ -425,22 +525,38 @@ class GameClient:
         running = True
         while running:
             interact = False
+            restart = False
+            game_over = self.state.get("game_status") in {"victory", "defeat"}
+            restart_rect, exit_rect = self._end_button_rects()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
-                    elif event.key == pygame.K_e:
+                    elif game_over and event.key in (pygame.K_r, pygame.K_RETURN):
+                        restart = True
+                    elif not game_over and event.key == pygame.K_e:
                         interact = True
+                elif (
+                    game_over
+                    and event.type == pygame.MOUSEBUTTONDOWN
+                    and event.button == 1
+                ):
+                    if restart_rect.collidepoint(event.pos):
+                        restart = True
+                    elif exit_rect.collidepoint(event.pos):
+                        running = False
 
             if not running:
                 break
 
-            if interact:
+            if restart:
+                self._exchange("restart", {})
+            elif interact:
                 self._exchange("interact", {})
             else:
-                self._exchange("input", self._inputs())
+                self._exchange("input", {} if game_over else self._inputs())
 
             assert self.screen is not None
             self.screen.fill(COLORS["background"])
@@ -448,6 +564,7 @@ class GameClient:
             self._draw_routers()
             self._draw_players()
             self._draw_hud()
+            self._draw_end_overlay()
             pygame.display.flip()
             self.clock.tick(FPS)
 
@@ -472,7 +589,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--name", default="Jugador UNI")
+    parser.add_argument("--name", default="")
     args = parser.parse_args()
 
     client = GameClient(args.host, args.port, args.name)

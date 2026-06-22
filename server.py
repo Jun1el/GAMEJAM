@@ -65,7 +65,7 @@ MAX_PLAYERS = 4
 MAX_REPAIRED_ROUTERS = 5
 ROUTER_ROTATION_SPEED = 90.0
 REPAIR_MIN_ANGLE = 0.0
-REPAIR_MAX_ANGLE = 30.0
+REPAIR_MAX_ANGLE = 90.0
 INTERACTION_DISTANCE = TILE_SIZE * 1.35
 KARMA_INTERVAL = 60.0
 KARMA_DURATION = 10.0
@@ -74,6 +74,42 @@ FIBER_SPEED_MULTIPLIER = 2.0
 
 PLAYER_COLORS = ["#4FC3F7", "#FF6F91", "#FFD166", "#A78BFA"]
 SPAWN_TILES = [(2, 23), (3, 8), (7, 2), (7, 28)]
+CRITICAL_ROUTE = ["ENTRADA", "CTIC", "BIBLIOTECA", "FIGMM"]
+MISSION_DURATIONS = [90.0, 150.0, 120.0, 90.0]
+COVERAGE_HOLD_TIME = 15.0
+BLACKOUT_HOLD_TIME = 10.0
+
+MISSIONS = [
+    {
+        "id": "diagnosis",
+        "title": "Diagnóstico del campus",
+        "description": "Reparen 3 routers diferentes para localizar las fallas.",
+        "goal": 3,
+    },
+    {
+        "id": "critical_route",
+        "title": "Ruta crítica",
+        "description": "Sigan la ruta: ENTRADA → CTIC → BIBLIOTECA → FIGMM.",
+        "goal": len(CRITICAL_ROUTE),
+    },
+    {
+        "id": "coverage",
+        "title": "Cobertura UNI",
+        "description": (
+            "Activen 1 router por zona (superior, central e inferior) y "
+            "mantengan los 3 verdes durante 15 segundos."
+        ),
+        "goal": COVERAGE_HOLD_TIME,
+    },
+    {
+        "id": "blackout",
+        "title": "Apagón general",
+        "description": (
+            "Activen 5 routers y manténganlos estables durante 10 segundos."
+        ),
+        "goal": BLACKOUT_HOLD_TIME,
+    },
+]
 
 
 @dataclass
@@ -119,6 +155,14 @@ class GameState:
         self.next_karma_at = time.monotonic() + KARMA_INTERVAL
         self.event_sequence = 0
         self.events: list[dict[str, Any]] = []
+        self.game_status = "playing"
+        self.result_message = ""
+        self.mission_index = 0
+        self.mission_started_at: float | None = None
+        self.mission_deadline: float | None = None
+        self.mission_repaired: set[str] = set()
+        self.route_progress = 0
+        self.hold_started_at: float | None = None
 
         for row, tiles in enumerate(MAPA_UNI):
             for col, tile in enumerate(tiles):
@@ -156,6 +200,8 @@ class GameState:
             )
             self.players[player_id] = player
             self._add_event("join", f"{player.name} se conectó.")
+            if self.mission_started_at is None and self.game_status == "playing":
+                self._begin_mission(0, time.monotonic())
             return player
 
     def remove_player(self, player_id: int) -> None:
@@ -173,6 +219,123 @@ class GameState:
                 return
             for key in player.inputs:
                 player.inputs[key] = payload.get(key) is True
+
+    def _router_by_name(self, name: str) -> Router:
+        return next(router for router in self.routers.values() if router.name == name)
+
+    def _reset_router(self, router: Router) -> None:
+        router.repaired = False
+        router.repaired_by = None
+        router.rotation = self.rng.uniform(0.0, 360.0)
+
+    def _begin_mission(self, index: int, now: float) -> None:
+        self.mission_index = index
+        self.mission_started_at = now
+        self.mission_deadline = now + MISSION_DURATIONS[index]
+        self.mission_repaired.clear()
+        self.route_progress = 0
+        self.hold_started_at = None
+
+        if index == 1:
+            for name in CRITICAL_ROUTE:
+                self._reset_router(self._router_by_name(name))
+        elif index == 3:
+            for router in self.routers.values():
+                self._reset_router(router)
+
+        mission = MISSIONS[index]
+        self._add_event(
+            "mission",
+            f"Misión {index + 1}: {mission['title']}.",
+        )
+
+    def _complete_mission(self, now: float) -> None:
+        completed = MISSIONS[self.mission_index]
+        self._add_event("mission", f"¡{completed['title']} completada!")
+        if self.mission_index == len(MISSIONS) - 1:
+            self.game_status = "victory"
+            self.result_message = (
+                "Eduroam ha sido estabilizado en todo el campus de la UNI."
+            )
+            self.mission_deadline = None
+            self._add_event("victory", self.result_message)
+            return
+        self._begin_mission(self.mission_index + 1, now)
+
+    def _coverage_zones_active(self) -> bool:
+        active_zones: set[str] = set()
+        for router in self.routers.values():
+            if not router.repaired:
+                continue
+            if router.row <= 3:
+                active_zones.add("superior")
+            elif router.row <= 7:
+                active_zones.add("central")
+            else:
+                active_zones.add("inferior")
+        return len(active_zones) == 3
+
+    def _register_repair(self, router: Router, now: float) -> None:
+        if self.game_status != "playing":
+            return
+
+        if self.mission_index == 0:
+            self.mission_repaired.add(router.router_id)
+            if len(self.mission_repaired) >= int(MISSIONS[0]["goal"]):
+                self._complete_mission(now)
+        elif self.mission_index == 1:
+            expected = CRITICAL_ROUTE[self.route_progress]
+            if router.name == expected:
+                self.route_progress += 1
+                if self.route_progress >= len(CRITICAL_ROUTE):
+                    self._complete_mission(now)
+
+    def _update_timed_mission(self, now: float) -> None:
+        if self.mission_index == 2:
+            condition_met = self._coverage_zones_active()
+            required = COVERAGE_HOLD_TIME
+        elif self.mission_index == 3:
+            condition_met = (
+                sum(router.repaired for router in self.routers.values())
+                >= MAX_REPAIRED_ROUTERS
+            )
+            required = BLACKOUT_HOLD_TIME
+        else:
+            return
+
+        if not condition_met:
+            self.hold_started_at = None
+            return
+        if self.hold_started_at is None:
+            self.hold_started_at = now
+        if now - self.hold_started_at >= required:
+            self._complete_mission(now)
+
+    def restart_campaign(self, now: float | None = None) -> tuple[bool, str]:
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            if self.game_status == "playing":
+                return False, "La campaña todavía está en curso."
+
+            self.game_status = "playing"
+            self.result_message = ""
+            for index, player in enumerate(self.players.values()):
+                row, col = SPAWN_TILES[index % len(SPAWN_TILES)]
+                player.x = col * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2
+                player.y = row * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2
+                player.repairs = 0
+                player.effect = None
+                player.effect_until = 0.0
+                for key in player.inputs:
+                    player.inputs[key] = False
+            for router in self.routers.values():
+                self._reset_router(router)
+            self.next_karma_at = now + KARMA_INTERVAL
+            self.events.clear()
+            self._begin_mission(0, now)
+            text = "La campaña de Eduroam se reinició."
+            self._add_event("restart", text)
+            return True, text
 
     def _collides_with_wall(self, x: float, y: float) -> bool:
         left = int(x // TILE_SIZE)
@@ -227,8 +390,23 @@ class GameState:
                 router.rotation = (
                     router.rotation + ROUTER_ROTATION_SPEED * min(dt, 0.1)
                 ) % 360.0
+            if self.game_status != "playing":
+                return
             for player in self.players.values():
                 self._move_player(player, dt, now)
+            if (
+                self.mission_started_at is not None
+                and self.mission_deadline is not None
+                and now >= self.mission_deadline
+            ):
+                self.game_status = "defeat"
+                self.result_message = (
+                    f"Se agotó el tiempo en: "
+                    f"{MISSIONS[self.mission_index]['title']}."
+                )
+                self._add_event("defeat", self.result_message)
+                return
+            self._update_timed_mission(now)
             if now >= self.next_karma_at:
                 self._apply_karma(now)
                 while self.next_karma_at <= now:
@@ -255,8 +433,13 @@ class GameState:
             f"{bottom.name} recibió Fibra Óptica.",
         )
 
-    def interact(self, player_id: int) -> tuple[bool, str]:
+    def interact(
+        self, player_id: int, now: float | None = None
+    ) -> tuple[bool, str]:
+        now = time.monotonic() if now is None else now
         with self.lock:
+            if self.game_status != "playing":
+                return False, "La campaña terminó. Reinícienla para volver a jugar."
             player = self.players.get(player_id)
             if not player:
                 return False, "Jugador inexistente."
@@ -305,7 +488,40 @@ class GameState:
             player.repairs += 1
             text = f"{player.name} reparó el router de {router.name}."
             self._add_event("repair", text)
+            self._register_repair(router, now)
             return True, text
+
+    def _mission_snapshot(self, now: float) -> dict[str, Any]:
+        mission = MISSIONS[self.mission_index]
+        target_router: str | None = None
+        if self.mission_index == 0:
+            progress: float = len(self.mission_repaired)
+        elif self.mission_index == 1:
+            progress = self.route_progress
+            if self.route_progress < len(CRITICAL_ROUTE):
+                target_router = self._router_by_name(
+                    CRITICAL_ROUTE[self.route_progress]
+                ).router_id
+        else:
+            progress = (
+                max(0.0, now - self.hold_started_at)
+                if self.hold_started_at is not None
+                else 0.0
+            )
+
+        return {
+            "id": mission["id"],
+            "number": self.mission_index + 1,
+            "total": len(MISSIONS),
+            "title": mission["title"],
+            "description": mission["description"],
+            "progress": round(min(progress, float(mission["goal"])), 1),
+            "goal": mission["goal"],
+            "time_remaining": round(
+                max(0.0, (self.mission_deadline or now) - now), 1
+            ),
+            "target_router": target_router,
+        }
 
     def snapshot(self, now: float | None = None) -> dict[str, Any]:
         now = time.monotonic() if now is None else now
@@ -340,6 +556,9 @@ class GameState:
                 "events": list(self.events),
                 "karma_in": round(max(0.0, self.next_karma_at - now), 1),
                 "max_repaired": MAX_REPAIRED_ROUTERS,
+                "game_status": self.game_status,
+                "mission": self._mission_snapshot(now),
+                "result_message": self.result_message,
             }
 
 
@@ -406,6 +625,9 @@ class GameServer:
                     self.game.set_inputs(player.player_id, message.get("payload"))
                 elif message_type == "interact":
                     success, text = self.game.interact(player.player_id)
+                    interaction_result = {"success": success, "message": text}
+                elif message_type == "restart":
+                    success, text = self.game.restart_campaign()
                     interaction_result = {"success": success, "message": text}
                 elif message_type == "disconnect":
                     break

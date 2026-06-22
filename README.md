@@ -7,8 +7,9 @@ mantiene las posiciones, colisiones y reglas de la partida.
 
 ## Objetivo
 
-Consigue la mayor cantidad de reparaciones. Acércate a un router averiado y
-pulsa `E` cuando su indicador esté dentro de la zona de sincronización.
+Completa en equipo una campaña de cuatro misiones para estabilizar Eduroam en
+todo el campus. Las reparaciones individuales muestran la contribución de cada
+jugador, pero la victoria es compartida.
 
 Los routers representan estos lugares:
 
@@ -32,7 +33,7 @@ nombre del jugador y pulsa **Conectar a Eduroam** para entrar a la partida.
 1. Busca un router rojo y acércate hasta quedar junto a él.
 2. Observa la línea que gira dentro del router.
 3. Cuando el router se vuelva amarillo, pulsa `E`. La ventana amarilla dura
-   aproximadamente un tercio de segundo.
+   aproximadamente un segundo.
 4. Si pulsaste dentro del intervalo correcto, el router se volverá verde y
    sumarás una reparación.
 
@@ -44,6 +45,23 @@ nombre del jugador y pulsa **Conectar a Eduroam** para entrar a la partida.
 - Azul, rosa, amarillo o morado: jugadores conectados.
 
 ## Reglas especiales
+
+### Campaña cooperativa
+
+1. **Diagnóstico del campus:** reparen tres routers diferentes.
+2. **Ruta crítica:** sigan ENTRADA → CTIC → BIBLIOTECA → FIGMM. El router
+   objetivo aparece rodeado por un halo amarillo.
+3. **Cobertura UNI:** activen un router de la zona superior, uno de la central
+   y uno de la inferior. Deben mantener esos tres routers verdes
+   simultáneamente durante 15 segundos; no es necesario activar todos los
+   routers del mapa.
+4. **Apagón general:** activen cinco routers y manténganlos estables durante
+   10 segundos.
+
+Cada misión tiene un límite de tiempo. Completar las cuatro produce una
+victoria compartida; si se agota un cronómetro, el equipo pierde. Después del
+resultado se puede pulsar `R` o usar el botón de reinicio para comenzar otra
+campaña.
 
 ### Ciclo del Lag
 
