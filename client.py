@@ -178,10 +178,22 @@ class GameClient:
         )
         display_name = self.name or "Escribe tu nombre"
         name_color = COLORS["text"] if self.name else COLORS["muted"]
-        self.screen.blit(
-            self.menu_font.render(display_name, True, name_color),
-            (name_rect.x + 15, name_rect.y + 15),
-        )
+        name_surface = self.menu_font.render(display_name, True, name_color)
+        name_position = (name_rect.x + 15, name_rect.y + 15)
+        self.screen.blit(name_surface, name_position)
+        if name_active and int(pulse * 2) % 2 == 0:
+            caret_x = (
+                name_position[0] + self.menu_font.size(self.name)[0] + 2
+                if self.name
+                else name_position[0]
+            )
+            pygame.draw.line(
+                self.screen,
+                COLORS["accent"],
+                (caret_x, name_rect.y + 12),
+                (caret_x, name_rect.bottom - 12),
+                2,
+            )
 
         play_rect = pygame.Rect(585, 482, 260, 52)
         button_color = (
@@ -384,6 +396,8 @@ class GameClient:
         self.screen.blit(title, (14, map_height + 10))
 
         mission = self.state.get("mission", {})
+        table_width = 330
+        content_width = self.screen.get_width() - table_width - 44
         mission_title = (
             f"MISIÓN {mission.get('number', 1)}/{mission.get('total', 4)}: "
             f"{mission.get('title', 'Preparando campaña')}"
@@ -402,7 +416,7 @@ class GameClient:
         progress = float(mission.get("progress", 0))
         goal = float(mission.get("goal", 1))
         time_remaining = float(mission.get("time_remaining", 0))
-        bar_rect = pygame.Rect(14, map_height + 82, 360, 14)
+        bar_rect = pygame.Rect(14, map_height + 82, min(360, content_width - 230), 14)
         pygame.draw.rect(self.screen, COLORS["input"], bar_rect, border_radius=7)
         fill_width = int(bar_rect.width * min(1.0, progress / max(1.0, goal)))
         if fill_width:
@@ -433,21 +447,48 @@ class GameClient:
 
         players = sorted(
             self.state.get("players", {}).values(),
-            key=lambda player: (-player["repairs"], player["name"]),
+            key=lambda player: (-player["repairs"], player["name"].lower()),
         )
-        scoreboard = "  |  ".join(
-            f"{player['name']}: {player['repairs']}"
-            + (
-                f" [{player['effect']} {player['effect_remaining']:.1f}s]"
-                if player["effect"]
-                else ""
-            )
-            for player in players
+        table_rect = pygame.Rect(
+            self.screen.get_width() - table_width - 14,
+            map_height + 10,
+            table_width,
+            142,
+        )
+        pygame.draw.rect(self.screen, COLORS["panel"], table_rect, border_radius=10)
+        pygame.draw.rect(
+            self.screen, COLORS["wall_edge"], table_rect, 1, border_radius=10
         )
         self.screen.blit(
-            self.font.render(scoreboard, True, COLORS["text"]),
-            (14, map_height + 132),
+            self.font.render("CLASIFICACIÓN Y KARMA", True, COLORS["accent"]),
+            (table_rect.x + 12, table_rect.y + 9),
         )
+        headers = self.small_font.render(
+            "#   JUGADOR             REP.   ESTADO", True, COLORS["muted"]
+        )
+        self.screen.blit(headers, (table_rect.x + 12, table_rect.y + 34))
+        for rank, player in enumerate(players, start=1):
+            if player["effect"] == "ping":
+                effect = "PING"
+                row_color = COLORS["defeat"]
+            elif player["effect"] == "fiber":
+                effect = "FIBRA"
+                row_color = COLORS["victory"]
+            elif rank == 1 and len(players) > 1:
+                effect = "LÍDER"
+                row_color = COLORS["router_ready"]
+            elif rank == len(players) and len(players) > 1:
+                effect = "ÚLTIMO"
+                row_color = COLORS["uni_blue_light"]
+            else:
+                effect = "-"
+                row_color = COLORS["text"]
+            name = player["name"][:16]
+            row_text = f"{rank:<3} {name:<19} {player['repairs']:<6} {effect}"
+            self.screen.blit(
+                self.small_font.render(row_text, True, row_color),
+                (table_rect.x + 12, table_rect.y + 51 + (rank - 1) * 21),
+            )
 
         events = self.state.get("events", [])
         if events:
@@ -457,13 +498,13 @@ class GameClient:
             event_text = newest["text"]
             self.screen.blit(
                 self.font.render(event_text, True, COLORS["router_ready"]),
-                (14, map_height + 157),
+                (14, map_height + 143),
             )
 
         if pygame.time.get_ticks() < self.status_until:
             self.screen.blit(
                 self.font.render(self.status_message, True, COLORS["text"]),
-                (14, map_height + 181),
+                (14, map_height + 169),
             )
 
     def _end_button_rects(self) -> tuple[pygame.Rect, pygame.Rect]:

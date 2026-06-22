@@ -74,7 +74,7 @@ FIBER_SPEED_MULTIPLIER = 2.0
 
 PLAYER_COLORS = ["#4FC3F7", "#FF6F91", "#FFD166", "#A78BFA"]
 SPAWN_TILES = [(2, 23), (3, 8), (7, 2), (7, 28)]
-CRITICAL_ROUTE = ["ENTRADA", "CTIC", "BIBLIOTECA", "FIGMM"]
+CRITICAL_ROUTE_LENGTH = 4
 MISSION_DURATIONS = [90.0, 150.0, 120.0, 90.0]
 COVERAGE_HOLD_TIME = 15.0
 BLACKOUT_HOLD_TIME = 10.0
@@ -89,8 +89,8 @@ MISSIONS = [
     {
         "id": "critical_route",
         "title": "Ruta crítica",
-        "description": "Sigan la ruta: ENTRADA → CTIC → BIBLIOTECA → FIGMM.",
-        "goal": len(CRITICAL_ROUTE),
+        "description": "Reparen los routers indicados en el orden mostrado.",
+        "goal": CRITICAL_ROUTE_LENGTH,
     },
     {
         "id": "coverage",
@@ -162,6 +162,7 @@ class GameState:
         self.mission_deadline: float | None = None
         self.mission_repaired: set[str] = set()
         self.route_progress = 0
+        self.critical_route: list[str] = []
         self.hold_started_at: float | None = None
 
         for row, tiles in enumerate(MAPA_UNI):
@@ -237,7 +238,11 @@ class GameState:
         self.hold_started_at = None
 
         if index == 1:
-            for name in CRITICAL_ROUTE:
+            self.critical_route = self.rng.sample(
+                [router.name for router in self.routers.values()],
+                CRITICAL_ROUTE_LENGTH,
+            )
+            for name in self.critical_route:
                 self._reset_router(self._router_by_name(name))
         elif index == 3:
             for router in self.routers.values():
@@ -284,10 +289,10 @@ class GameState:
             if len(self.mission_repaired) >= int(MISSIONS[0]["goal"]):
                 self._complete_mission(now)
         elif self.mission_index == 1:
-            expected = CRITICAL_ROUTE[self.route_progress]
+            expected = self.critical_route[self.route_progress]
             if router.name == expected:
                 self.route_progress += 1
-                if self.route_progress >= len(CRITICAL_ROUTE):
+                if self.route_progress >= len(self.critical_route):
                     self._complete_mission(now)
 
     def _update_timed_mission(self, now: float) -> None:
@@ -498,9 +503,9 @@ class GameState:
             progress: float = len(self.mission_repaired)
         elif self.mission_index == 1:
             progress = self.route_progress
-            if self.route_progress < len(CRITICAL_ROUTE):
+            if self.route_progress < len(self.critical_route):
                 target_router = self._router_by_name(
-                    CRITICAL_ROUTE[self.route_progress]
+                    self.critical_route[self.route_progress]
                 ).router_id
         else:
             progress = (
@@ -514,13 +519,18 @@ class GameState:
             "number": self.mission_index + 1,
             "total": len(MISSIONS),
             "title": mission["title"],
-            "description": mission["description"],
+            "description": (
+                "Ruta: " + " → ".join(self.critical_route)
+                if self.mission_index == 1
+                else mission["description"]
+            ),
             "progress": round(min(progress, float(mission["goal"])), 1),
             "goal": mission["goal"],
             "time_remaining": round(
                 max(0.0, (self.mission_deadline or now) - now), 1
             ),
             "target_router": target_router,
+            "route": list(self.critical_route) if self.mission_index == 1 else [],
         }
 
     def snapshot(self, now: float | None = None) -> dict[str, Any]:

@@ -121,16 +121,30 @@ class GameStateTests(unittest.TestCase):
         player = self.game.add_player("Ada")
         assert player is not None
         self.game._begin_mission(1, now=0.0)
+        route = list(self.game.critical_route)
 
         self.repair(player, "FIEE", now=1.0)
-        self.assertEqual(self.game.route_progress, 0)
+        if route[0] != "FIEE":
+            self.assertEqual(self.game.route_progress, 0)
+        else:
+            self.game.route_progress = 0
+            self.game._reset_router(self.game._router_by_name("FIEE"))
 
-        for index, name in enumerate(
-            ("ENTRADA", "CTIC", "BIBLIOTECA", "FIGMM"), start=2
-        ):
+        for index, name in enumerate(route, start=2):
             self.repair(player, name, now=float(index))
 
         self.assertEqual(self.game.mission_index, 2)
+
+    def test_critical_route_has_four_unique_random_routers(self) -> None:
+        self.game._begin_mission(1, now=0.0)
+        first_route = list(self.game.critical_route)
+        self.game._begin_mission(1, now=1.0)
+        second_route = list(self.game.critical_route)
+
+        self.assertEqual(len(first_route), 4)
+        self.assertEqual(len(set(first_route)), 4)
+        self.assertEqual(len(second_route), 4)
+        self.assertNotEqual(first_route, second_route)
 
     def test_coverage_requires_three_zones_for_fifteen_seconds(self) -> None:
         self.game._begin_mission(2, now=100.0)
@@ -189,6 +203,8 @@ class GameStateTests(unittest.TestCase):
         self.assertEqual(state["mission"]["id"], "critical_route")
         self.assertEqual(state["mission"]["time_remaining"], 145.0)
         self.assertIsNotNone(state["mission"]["target_router"])
+        self.assertEqual(state["mission"]["route"], self.game.critical_route)
+        self.assertIn(" → ".join(self.game.critical_route), state["mission"]["description"])
         self.assertIn("result_message", state)
 
 
