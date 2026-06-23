@@ -2,11 +2,23 @@ import random
 import unittest
 
 from server import (
+    BOMB_DAMAGE,
+    CHICKEN_FATIGUE_RECOVERY,
+    CHICKEN_HEAL,
+    CHICKEN_PICKUP_COOLDOWN,
+    FAILED_REPAIR_DAMAGE,
     KARMA_DURATION,
+    MAPA_UNI,
+    MAX_FATIGUE,
+    MAX_HEALTH,
     MAX_REPAIRED_ROUTERS,
+    MEDICAL_HEAL_PER_SECOND,
     PLAYER_SIZE,
+    REPAIR_FATIGUE,
     REPAIR_MAX_ANGLE,
+    RESPAWN_INVULNERABILITY,
     TILE_SIZE,
+    Bomb,
     GameState,
 )
 
@@ -55,6 +67,7 @@ class GameStateTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertTrue(router.repaired)
         self.assertEqual(player.repairs, 1)
+        self.assertEqual(player.fatigue, REPAIR_FATIGUE)
 
     def test_rejects_repair_just_outside_larger_window(self) -> None:
         player = self.game.add_player("Ada")
@@ -68,6 +81,201 @@ class GameStateTests(unittest.TestCase):
 
         self.assertFalse(success)
         self.assertFalse(router.repaired)
+        self.assertEqual(player.health, MAX_HEALTH - FAILED_REPAIR_DAMAGE)
+
+    def test_map_is_expanded_without_duplicating_routers(self) -> None:
+        self.assertEqual((len(MAPA_UNI), len(MAPA_UNI[0])), (22, 62))
+        self.assertEqual(len(self.game.routers), 16)
+        self.assertEqual(len(self.game.facilities), 2)
+        self.assertNotIn(
+            "COMEDOR", {router.name for router in self.game.routers.values()}
+        )
+        self.assertNotIn(
+            "CENTRO MEDICO", {router.name for router in self.game.routers.values()}
+        )
+
+    def test_fatigue_reduces_speed_to_half_at_maximum(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        player.fatigue = MAX_FATIGUE
+
+        self.assertEqual(self.game._speed_multiplier(player, now=10.0), 0.5)
+
+    def test_comedor_stock_is_shared_and_chicken_can_be_consumed(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        comedor = self.game._facility_by_name("COMEDOR")
+        player.x = comedor.col * TILE_SIZE - PLAYER_SIZE
+        player.y = comedor.row * TILE_SIZE
+        player.health = 50.0
+        player.fatigue = 80.0
+
+        success, _ = self.game.interact(player.player_id, now=10.0)
+
+        self.assertTrue(success)
+        self.assertEqual(player.chicken_portions, 1)
+        self.assertEqual(self.game.chicken_stock, 2)
+        self.assertEqual(player.repairs, 0)
+        self.assertEqual(
+            sum(router.repaired for router in self.game.routers.values()), 0
+        )
+
+        success, _ = self.game.consume_chicken(player.player_id, now=11.0)
+
+        self.assertTrue(success)
+        self.assertEqual(player.chicken_portions, 0)
+        self.assertEqual(player.health, 50.0 + CHICKEN_HEAL)
+        self.assertEqual(player.fatigue, 80.0 - CHICKEN_FATIGUE_RECOVERY)
+        self.assertGreater(player.chicken_boost_until, 11.0)
+        self.assertEqual(
+            player.next_chicken_pickup_at, 10.0 + CHICKEN_PICKUP_COOLDOWN
+        )
+
+        success, message = self.game.interact(player.player_id, now=12.0)
+
+        self.assertFalse(success)
+        self.assertIn("13.0s", message)
+        self.assertEqual(player.chicken_portions, 0)
+        self.assertEqual(self.game.chicken_stock, 2)
+
+        success, _ = self.game.interact(player.player_id, now=25.0)
+
+        self.assertTrue(success)
+        self.assertEqual(player.chicken_portions, 1)
+        self.assertEqual(self.game.chicken_stock, 1)
+
+    def test_medical_center_heals_gradually(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        medical = self.game._facility_by_name("CENTRO MEDICO")
+        player.x = medical.col * TILE_SIZE - PLAYER_SIZE
+        player.y = medical.row * TILE_SIZE
+        player.health = 50.0
+        player.healing_blocked_until = 0.0
+
+        self.game.update(0.1, now=10.0)
+
+        self.assertAlmostEqual(
+            player.health, 50.0 + MEDICAL_HEAL_PER_SECOND * 0.1
+        )
+
+    def test_double_and_triple_events_grant_extra_portions(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        comedor = self.game._facility_by_name("COMEDOR")
+        player.x = comedor.col * TILE_SIZE - PLAYER_SIZE
+        player.y = comedor.row * TILE_SIZE
+
+        self.game.food_event = "double"
+        success, _ = self.game.interact(player.player_id, now=10.0)
+
+        self.assertTrue(success)
+        self.assertEqual(player.chicken_portions, 2)
+        self.assertIn("doble_uni", player.achievements)
+
+        player.chicken_portions = 0
+        player.next_chicken_pickup_at = 0.0
+        self.game.food_event = "triple"
+        success, _ = self.game.interact(player.player_id, now=20.0)
+
+        self.assertTrue(success)
+        self.assertEqual(player.chicken_portions, 3)
+        self.assertIn("triple_uni", player.achievements)
+
+    def test_fly_menu_damages_player_and_unlocks_achievement(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        comedor = self.game._facility_by_name("COMEDOR")
+        player.x = comedor.col * TILE_SIZE - PLAYER_SIZE
+        player.y = comedor.row * TILE_SIZE
+        self.game.food_event = "fly"
+
+        self.game.interact(player.player_id, now=10.0)
+        success, _ = self.game.consume_chicken(player.player_id, now=11.0)
+
+        self.assertTrue(success)
+        self.assertEqual(player.health, MAX_HEALTH - 15.0)
+        self.assertEqual(player.fatigue, 25.0)
+        self.assertIn("menu_con_mosca", player.achievements)
+
+    def test_professor_assigns_and_completes_repair_side_quest(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        self.game.side_quest = {
+            "id": "control_sorpresa",
+            "title": "Control sorpresa",
+            "description": "Repara 2 routers.",
+            "goal": 2,
+            "kind": "repairs",
+        }
+        self.game.side_quest_status = "available"
+        player.x = 9 * TILE_SIZE
+        player.y = 11 * TILE_SIZE
+
+        success, _ = self.game.interact(player.player_id, now=10.0)
+
+        self.assertTrue(success)
+        self.assertEqual(self.game.side_quest_status, "active")
+        self.repair(player, "FIEE", now=11.0)
+        self.repair(player, "FIC", now=12.0)
+
+        self.assertEqual(self.game.side_quest_status, "completed")
+        self.assertIn("alumno_montalvo", player.achievements)
+
+    def test_repair_achievements_track_unique_faculties(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        names = [router.name for router in self.game.routers.values()][:8]
+
+        for index, name in enumerate(names, start=1):
+            self.repair(player, name, now=float(index))
+
+        self.assertIn("primera_vuelta", player.achievements)
+        self.assertIn("tour_uni", player.achievements)
+
+    def test_faculty_specific_achievements(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+
+        self.repair(player, "BIBLIOTECA", now=1.0)
+        player.fatigue = 50.0
+        self.repair(player, "ESTADIO UNI", now=2.0)
+
+        self.assertIn("raton_biblioteca", player.achievements)
+        self.assertIn("estadio_agotado", player.achievements)
+
+    def test_bomb_damage_respawns_and_resets_individual_score(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        player.health = BOMB_DAMAGE
+        player.repairs = 7
+        player.chicken_portions = 1
+        center_x = player.x + PLAYER_SIZE / 2
+        center_y = player.y + PLAYER_SIZE / 2
+        row = int(center_y // TILE_SIZE)
+        col = int(center_x // TILE_SIZE)
+        self.game.bombs[1] = Bomb(1, row, col, explode_at=10.0)
+        self.game.next_bomb_at = 999.0
+
+        self.game.update(0.1, now=10.0)
+
+        self.assertEqual(player.health, MAX_HEALTH)
+        self.assertEqual(player.repairs, 0)
+        self.assertEqual(player.chicken_portions, 0)
+        self.assertEqual(player.next_chicken_pickup_at, 0.0)
+        self.assertEqual(
+            player.invulnerable_until, 10.0 + RESPAWN_INVULNERABILITY
+        )
+        entrance = self.game._router_by_name("ENTRADA")
+        self.assertEqual(int(player.x // TILE_SIZE), entrance.col)
+        self.assertEqual(int(player.y // TILE_SIZE), entrance.row)
+
+    def test_bombs_spawn_only_on_walkable_tiles_outside_safe_zones(self) -> None:
+        bomb = self.game._spawn_bomb(now=10.0)
+
+        assert bomb is not None
+        self.assertEqual(MAPA_UNI[bomb.row][bomb.col], 0)
+        self.assertTrue(self.game._is_safe_bomb_tile(bomb.row, bomb.col))
 
     def test_zero_sum_cycle_breaks_one_at_capacity(self) -> None:
         player = self.game.add_player("Ada")
@@ -108,7 +316,7 @@ class GameStateTests(unittest.TestCase):
         self.game._begin_mission(0, now=0.0)
 
         self.repair(first, "FIEE", now=1.0)
-        self.repair(second, "COMEDOR", now=2.0)
+        self.repair(second, "BIBLIOTECA", now=2.0)
 
         self.assertEqual(len(self.game.mission_repaired), 2)
         self.assertEqual(self.game.mission_index, 0)
@@ -145,6 +353,8 @@ class GameStateTests(unittest.TestCase):
         self.assertEqual(len(set(first_route)), 4)
         self.assertEqual(len(second_route), 4)
         self.assertNotEqual(first_route, second_route)
+        self.assertNotIn("COMEDOR", first_route + second_route)
+        self.assertNotIn("CENTRO MEDICO", first_route + second_route)
 
     def test_coverage_requires_three_zones_for_fifteen_seconds(self) -> None:
         self.game._begin_mission(2, now=100.0)
@@ -173,7 +383,7 @@ class GameStateTests(unittest.TestCase):
     def test_mission_timeout_causes_defeat(self) -> None:
         self.game._begin_mission(0, now=0.0)
 
-        self.game.update(0.1, now=90.0)
+        self.game.update(0.1, now=120.0)
 
         self.assertEqual(self.game.game_status, "defeat")
 
@@ -182,6 +392,10 @@ class GameStateTests(unittest.TestCase):
         assert player is not None
         player.repairs = 8
         player.effect = "ping"
+        player.health = 20
+        player.fatigue = 90
+        player.chicken_portions = 1
+        player.next_chicken_pickup_at = 999.0
         next(iter(self.game.routers.values())).repaired = True
         self.game.game_status = "victory"
 
@@ -192,6 +406,10 @@ class GameStateTests(unittest.TestCase):
         self.assertEqual(self.game.mission_index, 0)
         self.assertEqual(player.repairs, 0)
         self.assertIsNone(player.effect)
+        self.assertEqual(player.health, MAX_HEALTH)
+        self.assertEqual(player.fatigue, 0)
+        self.assertEqual(player.chicken_portions, 0)
+        self.assertEqual(player.next_chicken_pickup_at, 0.0)
         self.assertFalse(any(router.repaired for router in self.game.routers.values()))
 
     def test_snapshot_exposes_campaign_contract(self) -> None:
@@ -201,11 +419,22 @@ class GameStateTests(unittest.TestCase):
 
         self.assertEqual(state["game_status"], "playing")
         self.assertEqual(state["mission"]["id"], "critical_route")
-        self.assertEqual(state["mission"]["time_remaining"], 145.0)
+        self.assertEqual(state["mission"]["time_remaining"], 175.0)
         self.assertIsNotNone(state["mission"]["target_router"])
         self.assertEqual(state["mission"]["route"], self.game.critical_route)
         self.assertIn(" → ".join(self.game.critical_route), state["mission"]["description"])
         self.assertIn("result_message", state)
+        self.assertIn("bombs", state)
+        self.assertIn("chicken_stock", state)
+        self.assertIn("facilities", state)
+        player = self.game.add_player("Cooldown")
+        assert player is not None
+        player.next_chicken_pickup_at = 40.0
+        state = self.game.snapshot(now=25.0)
+        self.assertEqual(
+            state["players"][str(player.player_id)]["chicken_pickup_cooldown"],
+            15.0,
+        )
 
 
 if __name__ == "__main__":
