@@ -49,8 +49,9 @@ nombre del jugador y pulsa **Conectar a Eduroam** para entrar a la partida.
 ### Campaña cooperativa
 
 1. **Diagnóstico del campus:** reparen tres routers diferentes.
-2. **Ruta crítica:** sigan ENTRADA → CTIC → BIBLIOTECA → FIGMM. El router
-   objetivo aparece rodeado por un halo amarillo.
+2. **Ruta crítica:** el servidor elige cuatro routers diferentes al azar en
+   cada campaña. Deben repararlos en el orden mostrado; el objetivo actual
+   aparece rodeado por un halo amarillo.
 3. **Cobertura UNI:** activen un router de la zona superior, uno de la central
    y uno de la inferior. Deben mantener esos tres routers verdes
    simultáneamente durante 15 segundos; no es necesario activar todos los
@@ -77,6 +78,9 @@ Cada 60 segundos, siempre que haya al menos dos jugadores:
   velocidad durante 10 segundos.
 - Quien tenga menos reparaciones recibe **Fibra Óptica** y duplica su velocidad
   durante 10 segundos.
+
+La tabla de clasificación muestra el orden de los jugadores, sus reparaciones
+y los estados de Karma activos para identificar al líder y al último lugar.
 
 ## Instalación
 
