@@ -13,16 +13,21 @@ jugador, pero la victoria es compartida.
 
 Los routers representan estos lugares:
 
-- FIGMM, FIEE, Biblioteca, Comedor, FIEECS, FIC, FIA y FIQT.
-- CTIC, FIM, FIIS, FC, Estadio UNI, Centro Médico y FAUA.
+- FIGMM, FIEE, Biblioteca, FIEECS, FIC, FIA y FIQT.
+- CTIC, FIM, FIIS, FC, Estadio UNI y FAUA.
 - FIP, Entrada y Salida.
+
+El **Comedor** y el **Centro Médico** son instalaciones especiales: no cuentan
+como routers, no aparecen en la Ruta Crítica y no afectan el límite de cinco
+conexiones activas.
 
 ## Controles
 
 | Acción | Tecla |
 | --- | --- |
 | Moverse | `WASD` o flechas |
-| Intentar reparar | `E` |
+| Reparar / recoger pollo | `E` |
+| Comer pollo almacenado | `Q` |
 | Salir | `Esc` o cerrar la ventana |
 
 Al abrir el cliente aparece una pantalla de inicio. Escribe o modifica el
@@ -81,6 +86,50 @@ Cada 60 segundos, siempre que haya al menos dos jugadores:
 
 La tabla de clasificación muestra el orden de los jugadores, sus reparaciones
 y los estados de Karma activos para identificar al líder y al último lugar.
+
+### Pollo a la brasa y supervivencia
+
+- Cada reparación aumenta el cansancio y reduce gradualmente la velocidad.
+- En el **Comedor** puedes pulsar `E` para recoger una porción del stock
+  compartido. Solo puedes llevar una y debes esperar 15 segundos antes de
+  recoger otra; su icono es un pollo y no un router.
+- Pulsa `Q` para recuperar vida, reducir cansancio y obtener velocidad temporal.
+- El **Centro Médico**, marcado con una cruz, recupera vida poco a poco mientras
+  permaneces cerca.
+- Las bombas de lag aparecen en los pasillos, avisan durante tres segundos y
+  causan daño al explotar.
+- Fallar la sincronización de un router también causa daño.
+- Al perder toda la vida reapareces en Entrada, pierdes tus reparaciones
+  individuales y conservas el progreso cooperativo de la misión.
+
+El mapa ampliado utiliza una cámara que sigue al jugador. El minimapa y las
+flechas indican el objetivo de misión, el Comedor y el Centro Médico.
+
+### Eventos del Comedor
+
+Cada 60–90 segundos puede activarse durante 20 segundos uno de estos eventos:
+
+- **¡DOBLEEE!**: una recogida entrega dos porciones.
+- **¡TRIPLEEE!**: el raro menú triple entrega tres porciones.
+- **¡MENÚ CON MOSCA!**: la porción causa daño y cansancio al consumirla.
+
+Los eventos aparecen como una alerta grande. El stock sigue siendo compartido
+y cada jugador mantiene su recarga personal de 15 segundos.
+
+### Prof. Montalvo y logros secretos
+
+El Prof. Montalvo espera cerca de CTIC. Acércate y pulsa `E` para aceptar una
+misión secundaria individual, como reparar routers de emergencia o recorrer
+lugares del campus antes de que cierre la práctica. Completarla reduce el
+cansancio y desbloquea un logro.
+
+Otros logros secretos se revelan al reparar por primera vez, recorrer varias
+facultades, probar menús especiales o recuperarse en el Centro Médico. El HUD
+muestra cuántos has descubierto, pero no revela los pendientes.
+
+Los límites de las cuatro misiones principales se ampliaron para que una
+campaña completa dure aproximadamente entre 8 y 12 minutos y permita explorar
+estas actividades opcionales.
 
 ## Instalación
 
