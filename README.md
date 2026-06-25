@@ -116,6 +116,23 @@ Cada 60–90 segundos puede activarse durante 20 segundos uno de estos eventos:
 Los eventos aparecen como una alerta grande. El stock sigue siendo compartido
 y cada jugador mantiene su recarga personal de 15 segundos.
 
+### Power-ups del campus
+
+Cada 22–38 segundos aparece (hasta dos a la vez) un power-up en los pasillos.
+Se recogen automáticamente al pasar por encima y desaparecen si nadie los toma
+en 25 segundos. El minimapa y una flecha **BONUS** ayudan a localizarlos.
+
+- **Escudo Firewall** (azul, `E`): otorga invulnerabilidad temporal; ignora
+  bombas y cortocircuitos durante unos segundos.
+- **Parche Express** (verde, `P`): guarda una carga que repara automáticamente
+  el próximo router aunque falles la sincronización. Solo se gasta cuando el
+  ángulo es incorrecto.
+- **Respaldo de Red** (celeste, `R`): congela el Ciclo del Lag para todo el
+  equipo, así reparar de más no derriba otros routers durante su duración.
+
+El Escudo y el Parche son individuales y se pierden al perder la conexión; el
+Respaldo de Red beneficia a todo el equipo.
+
 ### Prof. Montalvo y logros secretos
 
 El Prof. Montalvo espera cerca de CTIC. Acércate y pulsa `E` para aceptar una

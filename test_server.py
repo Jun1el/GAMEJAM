@@ -17,9 +17,11 @@ from server import (
     REPAIR_FATIGUE,
     REPAIR_MAX_ANGLE,
     RESPAWN_INVULNERABILITY,
+    SHIELD_DURATION,
     TILE_SIZE,
     Bomb,
     GameState,
+    PowerUp,
 )
 
 
@@ -294,6 +296,72 @@ class GameStateTests(unittest.TestCase):
         self.assertEqual(
             sum(router.repaired for router in routers),
             MAX_REPAIRED_ROUTERS,
+        )
+
+    def _place_on_powerup(self, player, powerup: PowerUp) -> None:
+        player.x = (powerup.col + 0.5) * TILE_SIZE - PLAYER_SIZE / 2
+        player.y = (powerup.row + 0.5) * TILE_SIZE - PLAYER_SIZE / 2
+
+    def test_powerups_spawn_only_on_floor_tiles(self) -> None:
+        powerup = self.game._spawn_powerup(now=10.0)
+
+        assert powerup is not None
+        self.assertEqual(MAPA_UNI[powerup.row][powerup.col], 0)
+        self.assertIn(powerup.kind, ("shield", "instant_repair", "freeze"))
+
+    def test_powerup_collected_on_contact_and_despawns(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        floor_row, floor_col = next(
+            (row, col)
+            for row, tiles in enumerate(MAPA_UNI)
+            for col, tile in enumerate(tiles)
+            if tile == 0
+        )
+        shield = PowerUp(99, floor_row, floor_col, "shield", expires_at=100.0)
+        self.game.powerups[shield.powerup_id] = shield
+        self._place_on_powerup(player, shield)
+        self.game.next_powerup_at = 999.0
+
+        self.game.update(0.1, now=10.0)
+
+        self.assertNotIn(shield.powerup_id, self.game.powerups)
+        self.assertEqual(player.invulnerable_until, 10.0 + SHIELD_DURATION)
+
+    def test_instant_repair_charge_fixes_router_outside_window(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        player.instant_repairs = 1
+        router = next(iter(self.game.routers.values()))
+        router.rotation = REPAIR_MAX_ANGLE + 30.0  # fuera de la ventana
+        player.x = router.col * TILE_SIZE - PLAYER_SIZE
+        player.y = router.row * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2
+
+        success, _ = self.game.interact(player.player_id, now=10.0)
+
+        self.assertTrue(success)
+        self.assertTrue(router.repaired)
+        self.assertEqual(player.instant_repairs, 0)
+        self.assertEqual(player.health, MAX_HEALTH)  # no recibió daño
+
+    def test_lag_freeze_prevents_router_knockdown(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        self.game.lag_freeze_until = 100.0
+        routers = list(self.game.routers.values())
+        for router in routers[:MAX_REPAIRED_ROUTERS]:
+            router.repaired = True
+        target = routers[MAX_REPAIRED_ROUTERS]
+        target.rotation = 5.0
+        player.x = target.col * TILE_SIZE - PLAYER_SIZE
+        player.y = target.row * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2
+
+        success, _ = self.game.interact(player.player_id, now=10.0)
+
+        self.assertTrue(success)
+        self.assertEqual(
+            sum(router.repaired for router in routers),
+            MAX_REPAIRED_ROUTERS + 1,
         )
 
     def test_karma_assigns_distinct_effects(self) -> None:

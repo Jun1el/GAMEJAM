@@ -136,6 +136,14 @@ BOMB_EXPLOSION_DISPLAY = 0.6
 SAFE_ZONE_RADIUS_TILES = 3.0
 RESPAWN_INVULNERABILITY = 3.0
 MAX_TOTAL_SPEED_MULTIPLIER = 2.5
+POWERUP_MIN_INTERVAL = 22.0
+POWERUP_MAX_INTERVAL = 38.0
+POWERUP_LIFETIME = 25.0
+POWERUP_MAX_ACTIVE = 2
+POWERUP_PICKUP_DISTANCE = TILE_SIZE * 0.9
+SHIELD_DURATION = 8.0
+LAG_FREEZE_DURATION = 12.0
+POWERUP_KINDS = ("shield", "instant_repair", "freeze")
 
 PLAYER_COLORS = ["#4FC3F7", "#FF6F91", "#FFD166", "#A78BFA"]
 SPAWN_TILES = [(row * 2 + 1, col * 2 + 1) for row, col in [
@@ -258,6 +266,7 @@ class Player:
     chicken_boost_until: float = 0.0
     invulnerable_until: float = 0.0
     healing_blocked_until: float = 0.0
+    instant_repairs: int = 0
     repaired_locations: set[str] = field(default_factory=set)
     achievements: set[str] = field(default_factory=set)
 
@@ -291,6 +300,15 @@ class Bomb:
     exploded_at: float | None = None
 
 
+@dataclass
+class PowerUp:
+    powerup_id: int
+    row: int
+    col: int
+    kind: str
+    expires_at: float
+
+
 class GameState:
     """Estado protegido y lógica autoritativa independiente de los sockets."""
 
@@ -320,6 +338,12 @@ class GameState:
         self.next_bomb_at = time.monotonic() + self.rng.uniform(
             BOMB_MIN_INTERVAL, BOMB_MAX_INTERVAL
         )
+        self.powerups: dict[int, PowerUp] = {}
+        self.next_powerup_id = 1
+        self.next_powerup_at = time.monotonic() + self.rng.uniform(
+            POWERUP_MIN_INTERVAL, POWERUP_MAX_INTERVAL
+        )
+        self.lag_freeze_until = 0.0
         self.food_event = "normal"
         self.food_event_until = 0.0
         self.next_food_event_at = time.monotonic() + self.rng.uniform(
@@ -579,6 +603,7 @@ class GameState:
         self._place_player_at_router(player, "ENTRADA")
         player.health = MAX_HEALTH
         player.repairs = 0
+        player.instant_repairs = 0
         player.chicken_portions = 0
         player.chicken_contaminated = False
         player.chicken_boost_until = 0.0
@@ -739,6 +764,77 @@ class GameState:
                 BOMB_MIN_INTERVAL, BOMB_MAX_INTERVAL
             )
 
+    def _spawn_powerup(self, now: float) -> PowerUp | None:
+        occupied = {(p.row, p.col) for p in self.powerups.values()}
+        candidates = [
+            (row, col)
+            for row, tiles in enumerate(MAPA_UNI)
+            for col, tile in enumerate(tiles)
+            if tile == 0 and (row, col) not in occupied
+        ]
+        if not candidates:
+            return None
+        row, col = self.rng.choice(candidates)
+        powerup = PowerUp(
+            self.next_powerup_id,
+            row,
+            col,
+            self.rng.choice(POWERUP_KINDS),
+            now + POWERUP_LIFETIME,
+        )
+        self.next_powerup_id += 1
+        self.powerups[powerup.powerup_id] = powerup
+        return powerup
+
+    def _collect_powerup(self, player: Player, powerup: PowerUp, now: float) -> None:
+        if powerup.kind == "shield":
+            player.invulnerable_until = max(
+                player.invulnerable_until, now + SHIELD_DURATION
+            )
+            text = (
+                f"{player.name} recogió un Escudo Firewall: "
+                "inmune al daño por un momento."
+            )
+        elif powerup.kind == "instant_repair":
+            player.instant_repairs += 1
+            text = (
+                f"{player.name} consiguió un Parche Express: "
+                "su próxima reparación será automática."
+            )
+        else:  # freeze
+            self.lag_freeze_until = max(
+                self.lag_freeze_until, now + LAG_FREEZE_DURATION
+            )
+            text = (
+                f"{player.name} activó un Respaldo de Red: "
+                "el Ciclo del Lag se congela para todos."
+            )
+        self._add_event("powerup", text)
+
+    def _update_powerups(self, now: float) -> None:
+        for powerup in list(self.powerups.values()):
+            if now >= powerup.expires_at:
+                del self.powerups[powerup.powerup_id]
+
+        for powerup in list(self.powerups.values()):
+            powerup_x = (powerup.col + 0.5) * TILE_SIZE
+            powerup_y = (powerup.row + 0.5) * TILE_SIZE
+            for player in self.players.values():
+                center_x, center_y = self._player_center(player)
+                if (
+                    math.hypot(center_x - powerup_x, center_y - powerup_y)
+                    <= POWERUP_PICKUP_DISTANCE
+                ):
+                    self._collect_powerup(player, powerup, now)
+                    self.powerups.pop(powerup.powerup_id, None)
+                    break
+
+        if now >= self.next_powerup_at and len(self.powerups) < POWERUP_MAX_ACTIVE:
+            self._spawn_powerup(now)
+            self.next_powerup_at = now + self.rng.uniform(
+                POWERUP_MIN_INTERVAL, POWERUP_MAX_INTERVAL
+            )
+
     def _update_chicken_stock(self, now: float) -> None:
         while (
             self.chicken_stock < CHICKEN_MAX_STOCK
@@ -875,6 +971,7 @@ class GameState:
                 player.chicken_boost_until = 0.0
                 player.invulnerable_until = 0.0
                 player.healing_blocked_until = 0.0
+                player.instant_repairs = 0
                 player.repaired_locations.clear()
                 player.achievements.clear()
                 for key in player.inputs:
@@ -882,6 +979,11 @@ class GameState:
             for router in self.routers.values():
                 self._reset_router(router)
             self.bombs.clear()
+            self.powerups.clear()
+            self.next_powerup_at = now + self.rng.uniform(
+                POWERUP_MIN_INTERVAL, POWERUP_MAX_INTERVAL
+            )
+            self.lag_freeze_until = 0.0
             self.chicken_stock = CHICKEN_MAX_STOCK
             self.next_chicken_restock_at = now + CHICKEN_RESTOCK_INTERVAL
             self.next_bomb_at = now + self.rng.uniform(
@@ -961,6 +1063,7 @@ class GameState:
             self._update_chicken_stock(now)
             self._update_food_event(now)
             self._update_bombs(now)
+            self._update_powerups(now)
             self._update_side_quest(now)
             if (
                 self.mission_started_at is not None
@@ -1041,20 +1144,25 @@ class GameState:
                     center_y - (item.row + 0.5) * TILE_SIZE,
                 ),
             )
+            used_instant_repair = False
             if not REPAIR_MIN_ANGLE <= router.rotation <= REPAIR_MAX_ANGLE:
-                if chicken_result is not None and chicken_result[0]:
-                    return chicken_result
-                self._damage_player(
-                    player, FAILED_REPAIR_DAMAGE, now, "un cortocircuito del router"
-                )
-                return (
-                    False,
-                    f"{router.name}: mala sincronización "
-                    f"({router.rotation:.0f}°).",
-                )
+                if player.instant_repairs > 0:
+                    player.instant_repairs -= 1
+                    used_instant_repair = True
+                else:
+                    if chicken_result is not None and chicken_result[0]:
+                        return chicken_result
+                    self._damage_player(
+                        player, FAILED_REPAIR_DAMAGE, now, "un cortocircuito del router"
+                    )
+                    return (
+                        False,
+                        f"{router.name}: mala sincronización "
+                        f"({router.rotation:.0f}°).",
+                    )
 
             repaired = [item for item in self.routers.values() if item.repaired]
-            if len(repaired) >= MAX_REPAIRED_ROUTERS:
+            if len(repaired) >= MAX_REPAIRED_ROUTERS and now >= self.lag_freeze_until:
                 broken = self.rng.choice(repaired)
                 broken.repaired = False
                 broken.repaired_by = None
@@ -1084,6 +1192,8 @@ class GameState:
                 if self.side_quest_progress >= int(self.side_quest["goal"]):
                     self._complete_side_quest(player)
             text = f"{player.name} reparó el router de {router.name}."
+            if used_instant_repair:
+                text += " (Parche Express)"
             if chicken_result is not None and chicken_result[0]:
                 text += " También recogió pollo a la brasa."
             self._add_event("repair", text)
@@ -1161,6 +1271,7 @@ class GameState:
                         "invulnerable_remaining": round(
                             max(0.0, player.invulnerable_until - now), 1
                         ),
+                        "instant_repairs": player.instant_repairs,
                         "achievements": [
                             {
                                 "id": achievement_id,
@@ -1209,6 +1320,21 @@ class GameState:
                     }
                     for bomb_id, bomb in self.bombs.items()
                 },
+                "powerups": {
+                    str(powerup_id): {
+                        "id": powerup.powerup_id,
+                        "row": powerup.row,
+                        "col": powerup.col,
+                        "kind": powerup.kind,
+                        "time_remaining": round(
+                            max(0.0, powerup.expires_at - now), 1
+                        ),
+                    }
+                    for powerup_id, powerup in self.powerups.items()
+                },
+                "lag_freeze_remaining": round(
+                    max(0.0, self.lag_freeze_until - now), 1
+                ),
                 "chicken_stock": self.chicken_stock,
                 "chicken_max_stock": CHICKEN_MAX_STOCK,
                 "chicken_restock_in": round(

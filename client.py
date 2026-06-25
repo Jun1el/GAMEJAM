@@ -26,8 +26,16 @@ EVENT_SOUNDS = {
     "repair": "repair",
     "damage": "fail",
     "chicken": "pickup",
+    "powerup": "pickup",
     "bomb": "bomb",
     "victory": "misioncomplete",
+}
+
+# Estilo visual de cada power-up: color e inicial mostrada en el icono.
+POWERUP_STYLE = {
+    "shield": ((90, 180, 255), "E"),
+    "instant_repair": ((80, 220, 130), "P"),
+    "freeze": ((140, 230, 245), "R"),
 }
 HUD_HEIGHT = 205
 PLAYER_SIZE = 20
@@ -536,6 +544,28 @@ class GameClient:
             fuse_end = (center[0] + 9, center[1] - 12)
             pygame.draw.line(self.screen, COLORS["accent"], center, fuse_end, 3)
 
+    def _draw_powerups(self) -> None:
+        assert self.screen is not None
+        bob = int(3 * math.sin(pygame.time.get_ticks() / 200))
+        for powerup in self.state.get("powerups", {}).values():
+            world_center = (
+                (powerup["col"] + 0.5) * self.tile_size,
+                (powerup["row"] + 0.5) * self.tile_size,
+            )
+            if not self._point_visible(*world_center):
+                continue
+            center = self._world_to_screen(*world_center)
+            center = (center[0], center[1] + bob)
+            color, letter = POWERUP_STYLE.get(
+                powerup["kind"], (COLORS["accent"], "?")
+            )
+            radius = 11
+            pygame.draw.circle(self.screen, color, center, radius + 3, 2)
+            pygame.draw.circle(self.screen, color, center, radius)
+            pygame.draw.circle(self.screen, COLORS["background"], center, radius, 2)
+            glyph = self.small_font.render(letter, True, COLORS["background"])
+            self.screen.blit(glyph, glyph.get_rect(center=center))
+
     def _draw_facilities(self) -> None:
         assert self.screen is not None
         pulse = 2 + int((pygame.time.get_ticks() / 220) % 3)
@@ -778,6 +808,17 @@ class GameClient:
                 ),
                 2,
             )
+        for powerup in self.state.get("powerups", {}).values():
+            color = POWERUP_STYLE.get(powerup["kind"], (COLORS["accent"], "?"))[0]
+            pygame.draw.circle(
+                self.screen,
+                color,
+                (
+                    minimap.x + int((powerup["col"] + 0.5) * scale_x),
+                    minimap.y + int((powerup["row"] + 0.5) * scale_y),
+                ),
+                3,
+            )
         for player in self.state.get("players", {}).values():
             pygame.draw.circle(
                 self.screen,
@@ -826,6 +867,9 @@ class GameClient:
                     COLORS["professor"],
                 )
             )
+        for powerup in self.state.get("powerups", {}).values():
+            color = POWERUP_STYLE.get(powerup["kind"], (COLORS["accent"], "?"))[0]
+            targets.append(("BONUS", powerup, color))
         target_id = self.state.get("mission", {}).get("target_router")
         if target_id:
             targets.insert(
@@ -918,14 +962,16 @@ class GameClient:
         repaired = sum(
             1 for router in self.state.get("routers", {}).values() if router["repaired"]
         )
-        info = self.font.render(
+        freeze_remaining = float(self.state.get("lag_freeze_remaining", 0))
+        info_text = (
             f"Karma en {karma:.1f}s  |  Routers activos: "
             f"{repaired}/{self.state.get('max_repaired', 5)}  |  "
             f"Pollo en Comedor: {self.state.get('chicken_stock', 0)}/"
-            f"{self.state.get('chicken_max_stock', 3)}",
-            True,
-            COLORS["muted"],
+            f"{self.state.get('chicken_max_stock', 3)}"
         )
+        if freeze_remaining > 0:
+            info_text += f"  |  Lag congelado {freeze_remaining:.0f}s"
+        info = self.font.render(info_text, True, COLORS["muted"])
         self.screen.blit(info, (14, map_height + 107))
 
         local_player = self.state.get("players", {}).get(str(self.player_id), {})
@@ -967,10 +1013,16 @@ class GameClient:
             chicken_text = "POLLO: DISPONIBLE EN COMEDOR"
         boost = float(local_player.get("chicken_boost_remaining", 0))
         speed = float(local_player.get("speed_multiplier", 1))
+        instant_repairs = int(local_player.get("instant_repairs", 0))
+        speed_text = (
+            f"{chicken_text}  ·  Velocidad x{speed:.2f}"
+            + (f" ({boost:.1f}s)" if boost else "")
+        )
+        if instant_repairs > 0:
+            speed_text += f"  ·  Parche Express x{instant_repairs}"
         self.screen.blit(
             self.small_font.render(
-                f"{chicken_text}  ·  Velocidad x{speed:.2f}"
-                + (f" ({boost:.1f}s)" if boost else ""),
+                speed_text,
                 True,
                 COLORS["chicken"] if local_player.get("has_chicken") else COLORS["muted"],
             ),
@@ -1170,6 +1222,7 @@ class GameClient:
             self._draw_facilities()
             self._draw_professor()
             self._draw_bombs()
+            self._draw_powerups()
             self._draw_players()
             self._draw_navigation_arrows()
             self._draw_minimap()
