@@ -143,6 +143,13 @@ POWERUP_PICKUP_DISTANCE = TILE_SIZE * 0.9
 SHIELD_DURATION = 8.0
 LAG_FREEZE_DURATION = 12.0
 POWERUP_KINDS = ("shield", "instant_repair", "freeze")
+WEATHER_MIN_INTERVAL = 45.0
+WEATHER_MAX_INTERVAL = 75.0
+RAIN_DURATION = 20.0
+PUDDLE_DURATION = 10.0
+STUN_DURATION = 2.0
+PUDDLE_RADIUS = TILE_SIZE * 0.8
+PUDDLE_SPAWN_INTERVAL = 1.5
 
 PLAYER_COLORS = ["#4FC3F7", "#FF6F91", "#FFD166", "#A78BFA"]
 SPAWN_TILES = [(row * 2 + 1, col * 2 + 1) for row, col in [
@@ -267,6 +274,7 @@ class Player:
     chicken_boost_until: float = 0.0
     invulnerable_until: float = 0.0
     healing_blocked_until: float = 0.0
+    stun_until: float = 0.0
     instant_repairs: int = 0
     repaired_locations: set[str] = field(default_factory=set)
     achievements: set[str] = field(default_factory=set)
@@ -300,6 +308,13 @@ class Bomb:
     explode_at: float
     exploded_at: float | None = None
 
+
+@dataclass
+class Puddle:
+    puddle_id: int
+    row: int
+    col: int
+    expires_at: float
 
 @dataclass
 class PowerUp:
@@ -352,6 +367,12 @@ class GameState:
         )
         self.food_event_sequence = 0
         self.side_quest = dict(self.rng.choice(SIDE_QUESTS))
+        self.weather = "clear"
+        self.weather_until = 0.0
+        self.next_weather_at = time.monotonic() + self.rng.uniform(WEATHER_MIN_INTERVAL, WEATHER_MAX_INTERVAL)
+        self.puddles: dict[int, Puddle] = {}
+        self.next_puddle_id = 1
+        self.next_puddle_at = 0.0
         self.side_quest_status = "available"
         self.side_quest_owner_id: int | None = None
         self.side_quest_progress = 0
@@ -833,6 +854,57 @@ class GameState:
             )
         self._add_event("powerup", text)
 
+    def _spawn_puddle(self, now: float) -> None:
+        candidates = [
+            (r, c)
+            for r, tiles in enumerate(MAPA_UNI)
+            for c, tile in enumerate(tiles)
+            if tile == 0
+        ]
+        if not candidates: return
+        r, c = self.rng.choice(candidates)
+        puddle = Puddle(self.next_puddle_id, r, c, now + PUDDLE_DURATION)
+        self.next_puddle_id += 1
+        self.puddles[puddle.puddle_id] = puddle
+
+    def _update_weather_and_puddles(self, now: float) -> None:
+        if self.weather == "rain" and now >= self.weather_until:
+            self.weather = "clear"
+            self.next_weather_at = now + self.rng.uniform(WEATHER_MIN_INTERVAL, WEATHER_MAX_INTERVAL)
+            self._add_event("weather", "La lluvia se detuvo. Eduroam se está secando.")
+        elif self.weather == "clear" and now >= self.next_weather_at:
+            self.weather = "rain"
+            self.weather_until = now + RAIN_DURATION
+            self._add_event("weather", "¡Lluvia en Lima! Cuidado con las goteras.")
+            self.next_puddle_at = now
+
+        if self.weather == "rain" and now >= self.next_puddle_at:
+            self._spawn_puddle(now)
+            self.next_puddle_at = now + PUDDLE_SPAWN_INTERVAL
+
+        for puddle in list(self.puddles.values()):
+            if now >= puddle.expires_at:
+                del self.puddles[puddle.puddle_id]
+
+        for puddle in list(self.puddles.values()):
+            puddle_x = (puddle.col + 0.5) * TILE_SIZE
+            puddle_y = (puddle.row + 0.5) * TILE_SIZE
+            for player in self.players.values():
+                if not player.alive or now < player.stun_until:
+                    continue
+                moving = any(player.inputs.values())
+                if not moving:
+                    continue
+                cx, cy = self._player_center(player)
+                if math.hypot(cx - puddle_x, cy - puddle_y) <= PUDDLE_RADIUS:
+                    player.stun_until = now + STUN_DURATION
+                    if player.chicken_portions > 0:
+                        player.chicken_portions = 0
+                        player.chicken_contaminated = False
+                        self._add_event("slip", f"{player.name} resbaló en un charco y perdió su pollo a la brasa.")
+                    else:
+                        self._add_event("slip", f"{player.name} resbaló en un charco.")
+
     def _update_powerups(self, now: float) -> None:
         for powerup in list(self.powerups.values()):
             if now >= powerup.expires_at:
@@ -996,6 +1068,7 @@ class GameState:
                 player.chicken_boost_until = 0.0
                 player.invulnerable_until = 0.0
                 player.healing_blocked_until = 0.0
+                player.stun_until = 0.0
                 player.instant_repairs = 0
                 player.repaired_locations.clear()
                 player.achievements.clear()
@@ -1005,6 +1078,10 @@ class GameState:
                 self._reset_router(router)
             self.bombs.clear()
             self.powerups.clear()
+            self.weather = "clear"
+            self.weather_until = 0.0
+            self.next_weather_at = now + self.rng.uniform(WEATHER_MIN_INTERVAL, WEATHER_MAX_INTERVAL)
+            self.puddles.clear()
             self.next_powerup_at = now + self.rng.uniform(
                 POWERUP_MIN_INTERVAL, POWERUP_MAX_INTERVAL
             )
@@ -1051,6 +1128,8 @@ class GameState:
         return False
 
     def _move_player(self, player: Player, dt: float, now: float) -> None:
+        if now < player.stun_until:
+            return
         if player.effect and now >= player.effect_until:
             player.effect = None
             player.effect_until = 0.0
@@ -1091,6 +1170,7 @@ class GameState:
             self._update_food_event(now)
             self._update_bombs(now)
             self._update_powerups(now)
+            self._update_weather_and_puddles(now)
             self._update_side_quest(now)
             if (
                 self.mission_started_at is not None
@@ -1299,6 +1379,9 @@ class GameState:
                         "invulnerable_remaining": round(
                             max(0.0, player.invulnerable_until - now), 1
                         ),
+                        "stun_remaining": round(
+                            max(0.0, player.stun_until - now), 1
+                        ),
                         "instant_repairs": player.instant_repairs,
                         "achievements": [
                             {
@@ -1406,6 +1489,16 @@ class GameState:
                 },
                 "karma_in": round(max(0.0, self.next_karma_at - now), 1),
                 "max_repaired": MAX_REPAIRED_ROUTERS,
+                "weather": self.weather,
+                "puddles": {
+                    str(pid): {
+                        "id": p.puddle_id,
+                        "row": p.row,
+                        "col": p.col,
+                        "expires_in": round(max(0.0, p.expires_at - now), 1)
+                    }
+                    for pid, p in self.puddles.items()
+                },
                 "game_status": self.game_status,
                 "mission": self._mission_snapshot(now),
                 "result_message": self.result_message,

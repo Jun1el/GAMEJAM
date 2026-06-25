@@ -543,5 +543,47 @@ class GameStateTests(unittest.TestCase):
         )
 
 
+
+    def test_rain_event_creates_puddles(self) -> None:
+        # Start rain manually
+        self.game.weather = "rain"
+        self.game.weather_until = 20.0
+        self.game.next_puddle_at = 10.0
+        
+        # Spawn puddle
+        self.game._update_weather_and_puddles(now=10.0)
+        self.assertTrue(len(self.game.puddles) > 0)
+        self.assertEqual(self.game.next_puddle_at, 10.0 + 1.5) # PUDDLE_SPAWN_INTERVAL
+
+    def test_player_slips_on_puddle_losing_chicken_and_getting_stunned(self) -> None:
+        player = self.game.add_player("PuddleSlipping")
+        assert player is not None
+        player.chicken_portions = 2
+        
+        # Make player move
+        player.inputs["right"] = True
+        
+        self.game.weather = "rain"
+        self.game.weather_until = 20.0
+        self.game.next_puddle_at = 10.0
+        self.game._spawn_puddle(now=10.0)
+        
+        # Force a puddle under the player
+        puddle = next(iter(self.game.puddles.values()))
+        player.x = (puddle.col + 0.5) * 32 # TILE_SIZE
+        player.y = (puddle.row + 0.5) * 32
+        
+        # Update
+        self.game._update_weather_and_puddles(now=10.5)
+        
+        self.assertEqual(player.chicken_portions, 0)
+        self.assertEqual(player.stun_until, 10.5 + 2.0) # STUN_DURATION
+        
+        # Ensure stun blocks movement
+        original_x = player.x
+        self.game._move_player(player, 0.1, 11.0)
+        self.assertEqual(player.x, original_x) # shouldn't move
+
+
 if __name__ == "__main__":
     unittest.main()

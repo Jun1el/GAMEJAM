@@ -31,6 +31,8 @@ EVENT_SOUNDS = {
     "bomb": "bomb",
     "eliminated": "fail",
     "victory": "misioncomplete",
+    "weather": "pickup",
+    "slip": "fail",
 }
 
 # Estilo visual de cada power-up: color e inicial mostrada en el icono.
@@ -81,6 +83,7 @@ COLORS = {
     "medical": (75, 220, 145),
     "professor": (190, 120, 255),
     "food_bad": (135, 200, 70),
+    "puddle": (60, 150, 220),
 }
 
 FACULTIES = [
@@ -609,6 +612,10 @@ class GameClient:
 
             label = self.small_font.render(player["name"], True, COLORS["text"])
             self.screen.blit(label, label.get_rect(midbottom=(rect.centerx, rect.top - 2)))
+            
+            if player.get("stun_remaining", 0) > 0:
+                stun_label = self.small_font.render("ATURDIDO", True, COLORS["defeat"])
+                self.screen.blit(stun_label, stun_label.get_rect(midbottom=(rect.centerx, rect.top - 14)))
 
     def _draw_bombs(self) -> None:
         assert self.screen is not None
@@ -1220,6 +1227,32 @@ class GameClient:
                 (14, map_height + 180),
             )
 
+    def _draw_puddles(self) -> None:
+        assert self.screen is not None
+        for puddle in self.state.get("puddles", {}).values():
+            world_center = (
+                (puddle["col"] + 0.5) * self.tile_size,
+                (puddle["row"] + 0.5) * self.tile_size,
+            )
+            if not self._point_visible(*world_center):
+                continue
+            center = self._world_to_screen(*world_center)
+            radius_x = int(self.tile_size * 0.8)
+            radius_y = int(self.tile_size * 0.6)
+            rect = pygame.Rect(center[0] - radius_x, center[1] - radius_y, radius_x * 2, radius_y * 2)
+            pygame.draw.ellipse(self.screen, COLORS["puddle"], rect)
+            pygame.draw.ellipse(self.screen, COLORS["uni_blue"], rect, 2)
+
+    def _draw_rain(self) -> None:
+        assert self.screen is not None
+        if self.state.get("weather") != "rain":
+            return
+        time_offset = pygame.time.get_ticks() / 10.0
+        for i in range(100):
+            x = (i * 73 + time_offset * 15) % GAME_WIDTH
+            y = (i * 37 + time_offset * 30) % VIEWPORT_HEIGHT
+            pygame.draw.line(self.screen, (150, 180, 220, 100), (x, y), (x - 10, y + 20), 1)
+
     def _draw_damage_flash(self) -> None:
         assert self.screen is not None
         if pygame.time.get_ticks() >= self.damage_flash_until:
@@ -1371,6 +1404,7 @@ class GameClient:
             self._draw_routers()
             self._draw_facilities()
             self._draw_professor()
+            self._draw_puddles()
             self._draw_bombs()
             self._draw_powerups()
             self._draw_players()
@@ -1378,6 +1412,7 @@ class GameClient:
             self._draw_minimap()
             self._draw_side_quest()
             self._draw_food_event_alert()
+            self._draw_rain()
             self._draw_damage_flash()
             self.screen.set_clip(None)
             self._draw_hud()
