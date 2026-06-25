@@ -46,6 +46,12 @@ START_HEIGHT = 600
 GAME_WIDTH = 1100
 GAME_HEIGHT = 760
 VIEWPORT_HEIGHT = GAME_HEIGHT - HUD_HEIGHT
+DEFAULT_START_WIDTH = START_WIDTH
+DEFAULT_START_HEIGHT = START_HEIGHT
+DEFAULT_GAME_WIDTH = GAME_WIDTH
+DEFAULT_GAME_HEIGHT = GAME_HEIGHT
+MIN_GAME_WIDTH = 960
+MIN_VIEWPORT_HEIGHT = 420
 
 COLORS = {
     "background": (13, 20, 32),
@@ -85,7 +91,12 @@ def parse_hex_color(value: str) -> tuple[int, int, int]:
 
 class GameClient:
     def __init__(
-        self, host: str, port: int, name: str, audio_enabled: bool = True
+        self,
+        host: str,
+        port: int,
+        name: str,
+        audio_enabled: bool = True,
+        music_enabled: bool = True,
     ) -> None:
         self.network = Network(host, port, timeout=5.0)
         self.name = name
@@ -104,6 +115,7 @@ class GameClient:
         self.last_food_event_sequence = 0
 
         pygame.init()
+        self._configure_window_sizes()
         pygame.display.set_caption("La vida da vueltas en Eduroam")
         self.screen: pygame.Surface | None = pygame.display.set_mode(
             (START_WIDTH, START_HEIGHT)
@@ -115,10 +127,36 @@ class GameClient:
         self.menu_title_font = pygame.font.SysFont("arial", 42, bold=True)
         self.menu_subtitle_font = pygame.font.SysFont("arial", 22, bold=True)
         self.menu_font = pygame.font.SysFont("arial", 18)
-        self.audio = AudioManager(enabled=audio_enabled)
+        self.audio = AudioManager(
+            enabled=audio_enabled, music_enabled=music_enabled
+        )
         # Los iconos se cargan tras crear la ventana; si falta un PNG cada
         # ``_draw_*`` recurre a su dibujo procedural de respaldo.
         self.sprites = SpriteManager()
+
+    def _configure_window_sizes(self) -> None:
+        """Ajusta la ventana al monitor para evitar que quede cortada."""
+        global START_WIDTH, START_HEIGHT, GAME_WIDTH, GAME_HEIGHT, VIEWPORT_HEIGHT
+
+        try:
+            display_info = pygame.display.Info()
+            screen_width = int(display_info.current_w or DEFAULT_GAME_WIDTH)
+            screen_height = int(display_info.current_h or DEFAULT_GAME_HEIGHT)
+        except pygame.error:
+            screen_width = DEFAULT_GAME_WIDTH
+            screen_height = DEFAULT_GAME_HEIGHT
+
+        # Margen para bordes de ventana, barra de tareas y escalado de Windows.
+        safe_width = max(MIN_GAME_WIDTH, screen_width - 90)
+        safe_height = max(HUD_HEIGHT + MIN_VIEWPORT_HEIGHT, screen_height - 120)
+
+        GAME_WIDTH = min(DEFAULT_GAME_WIDTH, safe_width)
+        GAME_HEIGHT = min(DEFAULT_GAME_HEIGHT, safe_height)
+        VIEWPORT_HEIGHT = max(MIN_VIEWPORT_HEIGHT, GAME_HEIGHT - HUD_HEIGHT)
+        GAME_HEIGHT = VIEWPORT_HEIGHT + HUD_HEIGHT
+
+        START_WIDTH = min(DEFAULT_START_WIDTH, max(760, safe_width))
+        START_HEIGHT = min(DEFAULT_START_HEIGHT, max(540, safe_height))
 
     def _blit_sprite(
         self,
@@ -338,6 +376,7 @@ class GameClient:
             self.last_event_id = existing_events[-1]["id"]
 
         self.screen = pygame.display.set_mode((GAME_WIDTH, GAME_HEIGHT))
+        self.audio.play_music()
         self.status_message = (
             "WASD para moverte · E repara/recoge pollo · Q consume pollo."
         )
@@ -1314,6 +1353,7 @@ class GameClient:
 
     def close(self) -> None:
         try:
+            self.audio.stop_music()
             if self.network.connected:
                 self.network.send(
                     {
@@ -1339,10 +1379,19 @@ def main() -> None:
         action="store_true",
         help="Desactiva los efectos de sonido (útil en entornos sin audio).",
     )
+    parser.add_argument(
+        "--no-music",
+        action="store_true",
+        help="Desactiva solo la musica de fondo.",
+    )
     args = parser.parse_args()
 
     client = GameClient(
-        args.host, args.port, args.name, audio_enabled=not args.no_audio
+        args.host,
+        args.port,
+        args.name,
+        audio_enabled=not args.no_audio,
+        music_enabled=not args.no_music,
     )
     try:
         client.run()

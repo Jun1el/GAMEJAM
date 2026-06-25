@@ -32,6 +32,9 @@ conexiones activas.
 
 Al abrir el cliente aparece una pantalla de inicio. Escribe o modifica el
 nombre del jugador y pulsa **Conectar a Eduroam** para entrar a la partida.
+La ventana del juego se ajusta automÃ¡ticamente al tamaÃ±o del monitor para no
+quedar escondida bajo la barra de tareas; el HUD conserva su altura y la
+cÃ¡mara reduce el Ã¡rea visible si es necesario.
 
 ## Cómo reparar un router
 
@@ -175,6 +178,9 @@ Luego abre otra terminal por cada jugador:
 ```
 
 Se pueden abrir hasta cuatro clientes en la misma computadora.
+El cliente reproduce efectos y una mÃºsica de fondo desde `assets/`. Si quieres
+silenciar todo usa `--no-audio`; si solo quieres quitar la mÃºsica, usa
+`--no-music`.
 
 ## Jugar en una red LAN
 
