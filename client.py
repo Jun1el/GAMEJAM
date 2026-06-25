@@ -16,6 +16,7 @@ except ImportError:
 
 from audio import AudioManager
 from network import DEFAULT_HOST, DEFAULT_PORT, Network, NetworkError
+from sprites import SpriteManager
 
 
 FPS = 30
@@ -28,6 +29,7 @@ EVENT_SOUNDS = {
     "chicken": "pickup",
     "powerup": "pickup",
     "bomb": "bomb",
+    "eliminated": "fail",
     "victory": "misioncomplete",
 }
 
@@ -114,6 +116,24 @@ class GameClient:
         self.menu_subtitle_font = pygame.font.SysFont("arial", 22, bold=True)
         self.menu_font = pygame.font.SysFont("arial", 18)
         self.audio = AudioManager(enabled=audio_enabled)
+        # Los iconos se cargan tras crear la ventana; si falta un PNG cada
+        # ``_draw_*`` recurre a su dibujo procedural de respaldo.
+        self.sprites = SpriteManager()
+
+    def _blit_sprite(
+        self,
+        name: str,
+        center: tuple[int, int],
+        size: int,
+        tint: tuple[int, int, int] | None = None,
+    ) -> bool:
+        """Dibuja el icono ``name`` centrado; devuelve ``False`` si no existe."""
+        assert self.screen is not None
+        sprite = self.sprites.get(name, size, tint)
+        if sprite is None:
+            return False
+        self.screen.blit(sprite, sprite.get_rect(center=center))
+        return True
 
     def _draw_signal(self, center: tuple[int, int], pulse: float) -> None:
         """Dibuja una señal Wi-Fi animada para la portada."""
@@ -465,8 +485,11 @@ class GameClient:
                     radius + pulse + 4,
                     3,
                 )
-            pygame.draw.circle(self.screen, color, center, radius)
-            pygame.draw.circle(self.screen, COLORS["background"], center, radius, 2)
+            if not self._blit_sprite("router", center, radius * 2 + 6, tint=color):
+                pygame.draw.circle(self.screen, color, center, radius)
+                pygame.draw.circle(
+                    self.screen, COLORS["background"], center, radius, 2
+                )
             direction = pygame.Vector2(radius - 2, 0).rotate(-rotation)
             pygame.draw.line(
                 self.screen,
@@ -495,9 +518,30 @@ class GameClient:
                 PLAYER_SIZE,
             )
             color = parse_hex_color(player["color"])
-            pygame.draw.rect(self.screen, color, rect, border_radius=5)
-            border = (255, 255, 255) if int(key) == self.player_id else COLORS["background"]
-            pygame.draw.rect(self.screen, border, rect, 2, border_radius=5)
+            is_local = int(key) == self.player_id
+            if not player.get("alive", True):
+                # Jugador fuera de juego: lápida tenue para que el equipo lo vea.
+                ghost = pygame.Surface((PLAYER_SIZE, PLAYER_SIZE), pygame.SRCALPHA)
+                ghost.fill((*COLORS["muted"], 110))
+                self.screen.blit(ghost, rect)
+                cross = self.small_font.render("X", True, COLORS["defeat"])
+                self.screen.blit(cross, cross.get_rect(center=rect.center))
+                label = self.small_font.render(
+                    f"{player['name']} (fuera)", True, COLORS["muted"]
+                )
+                self.screen.blit(
+                    label, label.get_rect(midbottom=(rect.centerx, rect.top - 2))
+                )
+                continue
+            if self._blit_sprite("player", rect.center, PLAYER_SIZE + 8, tint=color):
+                if is_local:
+                    pygame.draw.circle(
+                        self.screen, (255, 255, 255), rect.center, PLAYER_SIZE // 2 + 6, 2
+                    )
+            else:
+                pygame.draw.rect(self.screen, color, rect, border_radius=5)
+                border = (255, 255, 255) if is_local else COLORS["background"]
+                pygame.draw.rect(self.screen, border, rect, 2, border_radius=5)
             if player.get("invulnerable_remaining", 0) > 0:
                 pygame.draw.circle(
                     self.screen,
@@ -560,6 +604,10 @@ class GameClient:
                 powerup["kind"], (COLORS["accent"], "?")
             )
             radius = 11
+            if self._blit_sprite(
+                f"powerup_{powerup['kind']}", center, (radius + 5) * 2
+            ):
+                continue
             pygame.draw.circle(self.screen, color, center, radius + 3, 2)
             pygame.draw.circle(self.screen, color, center, radius)
             pygame.draw.circle(self.screen, COLORS["background"], center, radius, 2)
@@ -579,24 +627,28 @@ class GameClient:
             center = self._world_to_screen(*world_center)
             active = facility.get("active", True)
             if facility["type"] == "food":
-                color = COLORS["chicken"] if active else COLORS["muted"]
-                pygame.draw.circle(self.screen, color, center, 14 + pulse, 2)
-                pygame.draw.ellipse(
-                    self.screen,
-                    color,
-                    pygame.Rect(center[0] - 12, center[1] - 8, 19, 16),
-                )
-                pygame.draw.line(
-                    self.screen,
-                    COLORS["text"],
-                    (center[0] + 4, center[1] + 5),
-                    (center[0] + 13, center[1] + 12),
-                    4,
-                )
-                pygame.draw.circle(
-                    self.screen, COLORS["text"], (center[0] + 15, center[1] + 14), 3
-                )
-            else:
+                # Cuando el comedor está inactivo se atenúa con el dibujo base.
+                if active and self._blit_sprite("chicken", center, 32 + pulse):
+                    pass
+                else:
+                    color = COLORS["chicken"] if active else COLORS["muted"]
+                    pygame.draw.circle(self.screen, color, center, 14 + pulse, 2)
+                    pygame.draw.ellipse(
+                        self.screen,
+                        color,
+                        pygame.Rect(center[0] - 12, center[1] - 8, 19, 16),
+                    )
+                    pygame.draw.line(
+                        self.screen,
+                        COLORS["text"],
+                        (center[0] + 4, center[1] + 5),
+                        (center[0] + 13, center[1] + 12),
+                        4,
+                    )
+                    pygame.draw.circle(
+                        self.screen, COLORS["text"], (center[0] + 15, center[1] + 14), 3
+                    )
+            elif not self._blit_sprite("medical", center, 30):
                 color = COLORS["medical"]
                 box = pygame.Rect(center[0] - 14, center[1] - 14, 28, 28)
                 pygame.draw.rect(self.screen, color, box, border_radius=6)
@@ -653,21 +705,22 @@ class GameClient:
         if not self._point_visible(*world_center):
             return
         center = self._world_to_screen(*world_center)
-        pygame.draw.circle(self.screen, COLORS["professor"], center, 13)
-        pygame.draw.circle(self.screen, COLORS["text"], center, 13, 2)
-        pygame.draw.circle(
-            self.screen, COLORS["background"], (center[0] - 4, center[1] - 2), 2
-        )
-        pygame.draw.circle(
-            self.screen, COLORS["background"], (center[0] + 4, center[1] - 2), 2
-        )
-        pygame.draw.line(
-            self.screen,
-            COLORS["background"],
-            (center[0] - 5, center[1] + 5),
-            (center[0] + 5, center[1] + 5),
-            2,
-        )
+        if not self._blit_sprite("professor", center, 32):
+            pygame.draw.circle(self.screen, COLORS["professor"], center, 13)
+            pygame.draw.circle(self.screen, COLORS["text"], center, 13, 2)
+            pygame.draw.circle(
+                self.screen, COLORS["background"], (center[0] - 4, center[1] - 2), 2
+            )
+            pygame.draw.circle(
+                self.screen, COLORS["background"], (center[0] + 4, center[1] - 2), 2
+            )
+            pygame.draw.line(
+                self.screen,
+                COLORS["background"],
+                (center[0] - 5, center[1] + 5),
+                (center[0] + 5, center[1] + 5),
+                2,
+            )
         label = self.small_font.render("PROF. MONTALVO", True, COLORS["professor"])
         self.screen.blit(label, label.get_rect(midtop=(center[0], center[1] + 16)))
 
@@ -1072,7 +1125,10 @@ class GameClient:
         )
         self.screen.blit(headers, (table_rect.x + 12, table_rect.y + 34))
         for rank, player in enumerate(players, start=1):
-            if player["effect"] == "ping":
+            if not player.get("alive", True):
+                effect = "FUERA"
+                row_color = COLORS["muted"]
+            elif player["effect"] == "ping":
                 effect = "PING"
                 row_color = COLORS["defeat"]
             elif player["effect"] == "fiber":
@@ -1123,6 +1179,26 @@ class GameClient:
         return (
             pygame.Rect(center_x - 225, center_y + 82, 210, 52),
             pygame.Rect(center_x + 15, center_y + 82, 210, 52),
+        )
+
+    def _draw_spectator_banner(self) -> None:
+        """Aviso para el jugador eliminado mientras su equipo sigue jugando."""
+        assert self.screen is not None
+        if self.state.get("game_status") != "playing":
+            return
+        local_player = self.state.get("players", {}).get(str(self.player_id), {})
+        if local_player.get("alive", True):
+            return
+        banner = pygame.Surface((GAME_WIDTH, 46), pygame.SRCALPHA)
+        banner.fill((20, 10, 14, 200))
+        self.screen.blit(banner, (0, VIEWPORT_HEIGHT - 46))
+        text = self.font.render(
+            "Quedaste fuera de juego. Tu equipo sigue conectado; observa hasta el final.",
+            True,
+            COLORS["defeat"],
+        )
+        self.screen.blit(
+            text, text.get_rect(center=(GAME_WIDTH // 2, VIEWPORT_HEIGHT - 23))
         )
 
     def _draw_end_overlay(self) -> None:
@@ -1231,6 +1307,7 @@ class GameClient:
             self._draw_damage_flash()
             self.screen.set_clip(None)
             self._draw_hud()
+            self._draw_spectator_banner()
             self._draw_end_overlay()
             pygame.display.flip()
             self.clock.tick(FPS)

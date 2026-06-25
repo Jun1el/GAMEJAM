@@ -134,7 +134,6 @@ BOMB_RADIUS = TILE_SIZE * 2.0
 BOMB_MAX_ACTIVE = 3
 BOMB_EXPLOSION_DISPLAY = 0.6
 SAFE_ZONE_RADIUS_TILES = 3.0
-RESPAWN_INVULNERABILITY = 3.0
 MAX_TOTAL_SPEED_MULTIPLIER = 2.5
 POWERUP_MIN_INTERVAL = 22.0
 POWERUP_MAX_INTERVAL = 38.0
@@ -259,6 +258,7 @@ class Player:
     effect: str | None = None
     effect_until: float = 0.0
     health: float = MAX_HEALTH
+    alive: bool = True
     fatigue: float = 0.0
     chicken_portions: int = 0
     chicken_contaminated: bool = False
@@ -424,7 +424,7 @@ class GameState:
             raise ProtocolError("El payload de input debe ser un objeto.")
         with self.lock:
             player = self.players.get(player_id)
-            if not player:
+            if not player or not player.alive:
                 return
             for key in player.inputs:
                 player.inputs[key] = payload.get(key) is True
@@ -599,25 +599,16 @@ class GameState:
             fatigue_multiplier * karma_multiplier * chicken_multiplier,
         )
 
-    def _respawn_player(self, player: Player, now: float) -> None:
-        self._place_player_at_router(player, "ENTRADA")
-        player.health = MAX_HEALTH
-        player.repairs = 0
-        player.instant_repairs = 0
-        player.chicken_portions = 0
-        player.chicken_contaminated = False
-        player.chicken_boost_until = 0.0
-        player.invulnerable_until = now + RESPAWN_INVULNERABILITY
-        player.healing_blocked_until = now + MEDICAL_DAMAGE_COOLDOWN
-        self._add_event(
-            "respawn",
-            f"{player.name} perdió la conexión y reapareció en Entrada.",
-        )
+    def _end_in_defeat(self, message: str) -> None:
+        """Termina la campaña en derrota con el mensaje indicado."""
+        self.game_status = "defeat"
+        self.result_message = message
+        self._add_event("defeat", message)
 
     def _damage_player(
         self, player: Player, amount: float, now: float, source: str
     ) -> bool:
-        if now < player.invulnerable_until:
+        if not player.alive or now < player.invulnerable_until:
             return False
         player.health = max(0.0, player.health - amount)
         player.healing_blocked_until = now + MEDICAL_DAMAGE_COOLDOWN
@@ -626,8 +617,23 @@ class GameState:
             f"{player.name} recibió {amount:g} de daño por {source}.",
         )
         if player.health <= 0.0:
-            self._respawn_player(player, now)
+            self._eliminate_player(player)
         return True
+
+    def _eliminate_player(self, player: Player) -> None:
+        """Saca de juego al jugador; si ya no queda nadie, hay derrota."""
+        player.alive = False
+        player.effect = None
+        for key in player.inputs:
+            player.inputs[key] = False
+        self._add_event(
+            "eliminated",
+            f"{player.name} se quedó sin conexión y quedó fuera de juego.",
+        )
+        if all(not other.alive for other in self.players.values()):
+            self._end_in_defeat(
+                "Todo el equipo perdió la conexión. La red Eduroam colapsó."
+            )
 
     def consume_chicken(
         self, player_id: int, now: float | None = None
@@ -639,6 +645,8 @@ class GameState:
                 return False, "Jugador inexistente."
             if self.game_status != "playing":
                 return False, "La campaña ya terminó."
+            if not player.alive:
+                return False, "Quedaste fuera de juego."
             if player.chicken_portions <= 0:
                 return False, "No llevas una porción de pollo a la brasa."
             player.chicken_portions -= 1
@@ -748,6 +756,8 @@ class GameState:
                 bomb_x = (bomb.col + 0.5) * TILE_SIZE
                 bomb_y = (bomb.row + 0.5) * TILE_SIZE
                 for player in self.players.values():
+                    if not player.alive:
+                        continue
                     player_x, player_y = self._player_center(player)
                     if math.hypot(player_x - bomb_x, player_y - bomb_y) <= BOMB_RADIUS:
                         self._damage_player(player, BOMB_DAMAGE, now, "una bomba de lag")
@@ -820,6 +830,8 @@ class GameState:
             powerup_x = (powerup.col + 0.5) * TILE_SIZE
             powerup_y = (powerup.row + 0.5) * TILE_SIZE
             for player in self.players.values():
+                if not player.alive:
+                    continue
                 center_x, center_y = self._player_center(player)
                 if (
                     math.hypot(center_x - powerup_x, center_y - powerup_y)
@@ -964,6 +976,7 @@ class GameState:
                 player.effect = None
                 player.effect_until = 0.0
                 player.health = MAX_HEALTH
+                player.alive = True
                 player.fatigue = 0.0
                 player.chicken_portions = 0
                 player.chicken_contaminated = False
@@ -1058,6 +1071,8 @@ class GameState:
             if self.game_status != "playing":
                 return
             for player in self.players.values():
+                if not player.alive:
+                    continue
                 self._move_player(player, dt, now)
                 self._update_medical_healing(player, dt, now)
             self._update_chicken_stock(now)
@@ -1070,12 +1085,10 @@ class GameState:
                 and self.mission_deadline is not None
                 and now >= self.mission_deadline
             ):
-                self.game_status = "defeat"
-                self.result_message = (
+                self._end_in_defeat(
                     f"Se agotó el tiempo en: "
                     f"{MISSIONS[self.mission_index]['title']}."
                 )
-                self._add_event("defeat", self.result_message)
                 return
             self._update_timed_mission(now)
             if now >= self.next_karma_at:
@@ -1084,10 +1097,10 @@ class GameState:
                     self.next_karma_at += KARMA_INTERVAL
 
     def _apply_karma(self, now: float) -> None:
-        if len(self.players) < 2:
+        players = [player for player in self.players.values() if player.alive]
+        if len(players) < 2:
             return
 
-        players = list(self.players.values())
         highest = max(player.repairs for player in players)
         top = self.rng.choice([p for p in players if p.repairs == highest])
         remaining = [p for p in players if p.player_id != top.player_id]
@@ -1114,6 +1127,8 @@ class GameState:
             player = self.players.get(player_id)
             if not player:
                 return False, "Jugador inexistente."
+            if not player.alive:
+                return False, "Quedaste fuera de juego."
 
             professor_result = self._accept_side_quest(player, now)
             if professor_result is not None:
@@ -1255,6 +1270,7 @@ class GameState:
                         ),
                         "health": round(player.health, 1),
                         "max_health": MAX_HEALTH,
+                        "alive": player.alive,
                         "fatigue": round(player.fatigue, 1),
                         "has_chicken": player.chicken_portions > 0,
                         "chicken_portions": player.chicken_portions,

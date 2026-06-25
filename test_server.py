@@ -3,6 +3,7 @@ import unittest
 
 from server import (
     BOMB_DAMAGE,
+    BOMB_RADIUS,
     CHICKEN_FATIGUE_RECOVERY,
     CHICKEN_HEAL,
     CHICKEN_PICKUP_COOLDOWN,
@@ -16,7 +17,6 @@ from server import (
     PLAYER_SIZE,
     REPAIR_FATIGUE,
     REPAIR_MAX_ANGLE,
-    RESPAWN_INVULNERABILITY,
     SHIELD_DURATION,
     TILE_SIZE,
     Bomb,
@@ -246,31 +246,68 @@ class GameStateTests(unittest.TestCase):
         self.assertIn("raton_biblioteca", player.achievements)
         self.assertIn("estadio_agotado", player.achievements)
 
-    def test_bomb_damage_respawns_and_resets_individual_score(self) -> None:
-        player = self.game.add_player("Ada")
-        assert player is not None
-        player.health = BOMB_DAMAGE
-        player.repairs = 7
-        player.chicken_portions = 1
+    def _explode_bomb_on(self, player, now: float = 10.0) -> None:
+        """Detona una bomba sobre la casilla del jugador indicado."""
         center_x = player.x + PLAYER_SIZE / 2
         center_y = player.y + PLAYER_SIZE / 2
         row = int(center_y // TILE_SIZE)
         col = int(center_x // TILE_SIZE)
-        self.game.bombs[1] = Bomb(1, row, col, explode_at=10.0)
+        bomb_id = len(self.game.bombs) + 1
+        self.game.bombs[bomb_id] = Bomb(bomb_id, row, col, explode_at=now)
         self.game.next_bomb_at = 999.0
+
+    def test_losing_all_health_eliminates_only_that_player(self) -> None:
+        ada = self.game.add_player("Ada")
+        ben = self.game.add_player("Ben")
+        assert ada is not None and ben is not None
+        ada.health = BOMB_DAMAGE
+        # Aleja a Ben para que la explosión no lo alcance.
+        ben.x = ada.x + BOMB_RADIUS * 3
+        self._explode_bomb_on(ada)
 
         self.game.update(0.1, now=10.0)
 
-        self.assertEqual(player.health, MAX_HEALTH)
-        self.assertEqual(player.repairs, 0)
-        self.assertEqual(player.chicken_portions, 0)
-        self.assertEqual(player.next_chicken_pickup_at, 0.0)
-        self.assertEqual(
-            player.invulnerable_until, 10.0 + RESPAWN_INVULNERABILITY
+        self.assertEqual(ada.health, 0.0)
+        self.assertFalse(ada.alive)
+        self.assertTrue(ben.alive)
+        # El equipo conserva un superviviente: la campaña continúa.
+        self.assertEqual(self.game.game_status, "playing")
+        self.assertTrue(
+            any(
+                event["kind"] == "eliminated" and "Ada" in event["text"]
+                for event in self.game.events
+            )
         )
-        entrance = self.game._router_by_name("ENTRADA")
-        self.assertEqual(int(player.x // TILE_SIZE), entrance.col)
-        self.assertEqual(int(player.y // TILE_SIZE), entrance.row)
+
+    def test_defeat_only_when_all_players_are_eliminated(self) -> None:
+        ada = self.game.add_player("Ada")
+        ben = self.game.add_player("Ben")
+        assert ada is not None and ben is not None
+        ada.alive = False  # Ada ya estaba fuera.
+        ben.health = BOMB_DAMAGE
+        self._explode_bomb_on(ben)
+
+        self.game.update(0.1, now=10.0)
+
+        self.assertFalse(ben.alive)
+        self.assertEqual(self.game.game_status, "defeat")
+        self.assertTrue(
+            any(event["kind"] == "defeat" for event in self.game.events)
+        )
+
+    def test_eliminated_player_ignores_inputs_and_actions(self) -> None:
+        player = self.game.add_player("Ada")
+        assert player is not None
+        player.alive = False
+
+        self.game.set_inputs(player.player_id, {"right": True})
+        self.assertFalse(player.inputs["right"])
+
+        success, _ = self.game.interact(player.player_id, now=5.0)
+        self.assertFalse(success)
+        player.chicken_portions = 1
+        success, _ = self.game.consume_chicken(player.player_id, now=5.0)
+        self.assertFalse(success)
 
     def test_bombs_spawn_only_on_walkable_tiles_outside_safe_zones(self) -> None:
         bomb = self.game._spawn_bomb(now=10.0)

@@ -99,8 +99,9 @@ y los estados de Karma activos para identificar al líder y al último lugar.
 - Las bombas de lag aparecen en los pasillos, avisan durante tres segundos y
   causan daño al explotar.
 - Fallar la sincronización de un router también causa daño.
-- Al perder toda la vida reapareces en Entrada, pierdes tus reparaciones
-  individuales y conservas el progreso cooperativo de la misión.
+- Si un jugador pierde toda la vida queda fuera de juego: no se mueve ni
+  interactúa y solo observa, pero el resto del equipo sigue jugando. La campaña
+  solo termina en derrota cuando todos los jugadores quedan eliminados.
 
 El mapa ampliado utiliza una cámara que sigue al jugador. El minimapa y las
 flechas indican el objetivo de misión, el Comedor y el Centro Médico.
@@ -228,4 +229,9 @@ Get-CimInstance Win32_Process |
 - `network.py`: protocolo TCP/IPv4 con mensajes JSON.
 - `server.py`: estado autoritativo, colisiones, routers y Karma.
 - `client.py`: interfaz, controles y renderizado con Pygame.
+- `audio.py`: carga y reproduce los efectos de sonido de `assets/`.
+- `sprites.py`: carga los iconos PNG de `assets/` (escalado y tintado) con
+  respaldo al dibujo procedural cuando falta un archivo.
+- `generate_sprites.py`: regenera los iconos PNG por código (`python
+  generate_sprites.py`).
 - `test_network.py` y `test_server.py`: pruebas automatizadas.
