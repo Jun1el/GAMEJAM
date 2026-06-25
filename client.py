@@ -14,10 +14,21 @@ except ImportError:
     print("Pygame no está instalado. Ejecuta: python -m pip install pygame")
     raise SystemExit(1)
 
+from audio import AudioManager
 from network import DEFAULT_HOST, DEFAULT_PORT, Network, NetworkError
 
 
 FPS = 30
+
+# Asocia el campo ``kind`` de los eventos del servidor con un efecto de audio.
+# Los nombres deben coincidir con los archivos de ``assets/`` (sin extensión).
+EVENT_SOUNDS = {
+    "repair": "repair",
+    "damage": "fail",
+    "chicken": "pickup",
+    "bomb": "bomb",
+    "victory": "misioncomplete",
+}
 HUD_HEIGHT = 205
 PLAYER_SIZE = 20
 START_WIDTH = 900
@@ -63,7 +74,9 @@ def parse_hex_color(value: str) -> tuple[int, int, int]:
 
 
 class GameClient:
-    def __init__(self, host: str, port: int, name: str) -> None:
+    def __init__(
+        self, host: str, port: int, name: str, audio_enabled: bool = True
+    ) -> None:
         self.network = Network(host, port, timeout=5.0)
         self.name = name
         self.player_id: int | None = None
@@ -92,6 +105,7 @@ class GameClient:
         self.menu_title_font = pygame.font.SysFont("arial", 42, bold=True)
         self.menu_subtitle_font = pygame.font.SysFont("arial", 22, bold=True)
         self.menu_font = pygame.font.SysFont("arial", 18)
+        self.audio = AudioManager(enabled=audio_enabled)
 
     def _draw_signal(self, center: tuple[int, int], pulse: float) -> None:
         """Dibuja una señal Wi-Fi animada para la portada."""
@@ -291,6 +305,9 @@ class GameClient:
         self.tile_size = int(payload["tile_size"])
         self.repair_window = tuple(payload["repair_window"])
         self.state = payload["state"]
+        existing_events = self.state.get("events", [])
+        if existing_events:
+            self.last_event_id = existing_events[-1]["id"]
 
         self.screen = pygame.display.set_mode((GAME_WIDTH, GAME_HEIGHT))
         self.status_message = (
@@ -329,6 +346,29 @@ class GameClient:
         if interaction:
             self.status_message = interaction["message"]
             self.status_until = pygame.time.get_ticks() + 2500
+        self._process_audio_events()
+
+    def _process_audio_events(self) -> None:
+        """Reproduce un efecto por cada evento del servidor aún no escuchado."""
+        events = self.state.get("events", [])
+        for event in events:
+            if event["id"] <= self.last_event_id:
+                continue
+            self._play_event_sound(event)
+        if events:
+            self.last_event_id = max(self.last_event_id, events[-1]["id"])
+
+    def _play_event_sound(self, event: dict[str, Any]) -> None:
+        kind = event.get("kind")
+        if kind == "mission":
+            # El mismo 'kind' anuncia el inicio y el fin de la misión; solo
+            # suena la fanfarria cuando una misión se completa.
+            if "completada" in event.get("text", "").lower():
+                self.audio.play("misioncomplete")
+            return
+        sound = EVENT_SOUNDS.get(kind)
+        if sound:
+            self.audio.play(sound)
 
     def _update_camera(self) -> None:
         if self.player_id is None:
@@ -1004,10 +1044,7 @@ class GameClient:
 
         events = self.state.get("events", [])
         if events:
-            newest = events[-1]
-            if newest["id"] > self.last_event_id:
-                self.last_event_id = newest["id"]
-            event_text = newest["text"]
+            event_text = events[-1]["text"]
             self.screen.blit(
                 self.font.render(event_text, True, COLORS["router_ready"]),
                 (14, map_height + 156),
@@ -1167,9 +1204,16 @@ def main() -> None:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--name", default="")
+    parser.add_argument(
+        "--no-audio",
+        action="store_true",
+        help="Desactiva los efectos de sonido (útil en entornos sin audio).",
+    )
     args = parser.parse_args()
 
-    client = GameClient(args.host, args.port, args.name)
+    client = GameClient(
+        args.host, args.port, args.name, audio_enabled=not args.no_audio
+    )
     try:
         client.run()
     except NetworkError as exc:
