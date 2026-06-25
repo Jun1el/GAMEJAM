@@ -28,6 +28,7 @@ from server import (
 class GameStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.game = GameState(random.Random(7))
+        self.game.start_game()
 
     def repair(
         self, player, router_name: str, now: float = 10.0

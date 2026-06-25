@@ -83,6 +83,10 @@ COLORS = {
     "food_bad": (135, 200, 70),
 }
 
+FACULTIES = [
+    "FIGMM", "FIEE", "BIBLIOTECA", "FIEECS", "FIC", "FIA", "FIQT", 
+    "CTIC", "FIM", "FIIS", "FC", "ESTADIO UNI", "FAUA", "FIP", "ENTRADA", "SALIDA"
+]
 
 def parse_hex_color(value: str) -> tuple[int, int, int]:
     value = value.lstrip("#")
@@ -113,6 +117,7 @@ class GameClient:
         self.camera_y = 0.0
         self.damage_flash_until = 0
         self.last_food_event_sequence = 0
+        self.faculty_index = 0
 
         pygame.init()
         self._configure_window_sizes()
@@ -192,7 +197,7 @@ class GameClient:
 
     def _draw_start_screen(
         self, name_active: bool, play_hovered: bool, pulse: float
-    ) -> tuple[pygame.Rect, pygame.Rect]:
+    ) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect]:
         assert self.screen is not None
         self.screen.fill(COLORS["background"])
 
@@ -262,8 +267,8 @@ class GameClient:
             self.screen.blit(rendered, (75, 350 + index * 25))
 
         name_label = self.font.render("NOMBRE DEL JUGADOR", True, COLORS["muted"])
-        self.screen.blit(name_label, (55, 458))
-        name_rect = pygame.Rect(55, 482, 500, 52)
+        self.screen.blit(name_label, (55, 430))
+        name_rect = pygame.Rect(55, 452, 280, 52)
         pygame.draw.rect(self.screen, COLORS["input"], name_rect, border_radius=9)
         pygame.draw.rect(
             self.screen,
@@ -291,13 +296,23 @@ class GameClient:
                 2,
             )
 
-        play_rect = pygame.Rect(585, 482, 260, 52)
+        fac_label = self.font.render("FACULTAD (Clic)", True, COLORS["muted"])
+        self.screen.blit(fac_label, (345, 430))
+        fac_rect = pygame.Rect(345, 452, 220, 52)
+        pygame.draw.rect(self.screen, COLORS["panel"], fac_rect, border_radius=9)
+        pygame.draw.rect(
+            self.screen, COLORS["wall_edge"], fac_rect, 2, border_radius=9
+        )
+        fac_surface = self.menu_font.render(FACULTIES[self.faculty_index], True, COLORS["accent"])
+        self.screen.blit(fac_surface, (fac_rect.x + 15, fac_rect.y + 15))
+
+        play_rect = pygame.Rect(575, 452, 270, 52)
         button_color = (
             COLORS["uni_blue_light"] if play_hovered else COLORS["uni_blue"]
         )
         pygame.draw.rect(self.screen, button_color, play_rect, border_radius=9)
         play = self.menu_subtitle_font.render(
-            "CONECTAR A EDUROAM", True, COLORS["text"]
+            "LISTO", True, COLORS["text"]
         )
         self.screen.blit(play, play.get_rect(center=play_rect.center))
 
@@ -306,8 +321,8 @@ class GameClient:
             True,
             COLORS["muted"],
         )
-        self.screen.blit(footer, footer.get_rect(center=(START_WIDTH // 2, 570)))
-        return name_rect, play_rect
+        self.screen.blit(footer, footer.get_rect(center=(START_WIDTH // 2, 530)))
+        return name_rect, play_rect, fac_rect
 
     def show_start_screen(self) -> bool:
         """Muestra la portada y devuelve True cuando el jugador decide entrar."""
@@ -316,10 +331,10 @@ class GameClient:
 
         while True:
             mouse_position = pygame.mouse.get_pos()
-            play_hovered = pygame.Rect(585, 482, 260, 52).collidepoint(
+            play_hovered = pygame.Rect(575, 452, 270, 52).collidepoint(
                 mouse_position
             )
-            name_rect, play_rect = self._draw_start_screen(
+            name_rect, play_rect, fac_rect = self._draw_start_screen(
                 name_active, play_hovered, elapsed
             )
             pygame.display.flip()
@@ -340,6 +355,8 @@ class GameClient:
                             self.name += event.unicode
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     name_active = name_rect.collidepoint(event.pos)
+                    if fac_rect.collidepoint(event.pos):
+                        self.faculty_index = (self.faculty_index + 1) % len(FACULTIES)
                     if play_rect.collidepoint(event.pos) and self.name.strip():
                         self.name = self.name.strip()
                         return True
@@ -355,7 +372,7 @@ class GameClient:
         response = self.network.request(
             {
                 "type": "join",
-                "payload": {"name": self.name},
+                "payload": {"name": self.name, "faculty": FACULTIES[self.faculty_index]},
                 "request_id": self._next_request_id(),
             }
         )
@@ -1240,6 +1257,22 @@ class GameClient:
             text, text.get_rect(center=(GAME_WIDTH // 2, VIEWPORT_HEIGHT - 23))
         )
 
+    def _draw_lobby_banner(self) -> None:
+        assert self.screen is not None
+        if self.state.get("game_status") != "lobby":
+            return
+        banner = pygame.Surface((GAME_WIDTH, 46), pygame.SRCALPHA)
+        banner.fill((10, 20, 40, 200))
+        self.screen.blit(banner, (0, VIEWPORT_HEIGHT - 46))
+        text = self.title_font.render(
+            "Esperando a otros jugadores... Pulsa ENTER para Iniciar",
+            True,
+            COLORS["accent"],
+        )
+        self.screen.blit(
+            text, text.get_rect(center=(GAME_WIDTH // 2, VIEWPORT_HEIGHT - 23))
+        )
+
     def _draw_end_overlay(self) -> None:
         assert self.screen is not None
         status = self.state.get("game_status")
@@ -1300,6 +1333,8 @@ class GameClient:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    elif self.state.get("game_status") == "lobby" and event.key == pygame.K_RETURN:
+                        self._exchange("start_game", {})
                     elif game_over and event.key in (pygame.K_r, pygame.K_RETURN):
                         restart = True
                     elif not game_over and event.key == pygame.K_e:
@@ -1347,6 +1382,7 @@ class GameClient:
             self.screen.set_clip(None)
             self._draw_hud()
             self._draw_spectator_banner()
+            self._draw_lobby_banner()
             self._draw_end_overlay()
             pygame.display.flip()
             self.clock.tick(FPS)

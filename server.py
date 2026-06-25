@@ -246,6 +246,7 @@ class Player:
     x: float
     y: float
     color: str
+    faculty: str = ""
     repairs: int = 0
     inputs: dict[str, bool] = field(
         default_factory=lambda: {
@@ -322,7 +323,7 @@ class GameState:
         self.next_karma_at = time.monotonic() + KARMA_INTERVAL
         self.event_sequence = 0
         self.events: list[dict[str, Any]] = []
-        self.game_status = "playing"
+        self.game_status = "lobby"
         self.result_message = ""
         self.mission_index = 0
         self.mission_started_at: float | None = None
@@ -384,7 +385,7 @@ class GameState:
         )
         self.events = self.events[-20:]
 
-    def add_player(self, name: str) -> Player | None:
+    def add_player(self, name: str, faculty: str = "") -> Player | None:
         with self.lock:
             if len(self.players) >= MAX_PLAYERS:
                 return None
@@ -398,12 +399,23 @@ class GameState:
                 x=col * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
                 y=row * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
                 color=PLAYER_COLORS[(player_id - 1) % len(PLAYER_COLORS)],
+                faculty=faculty,
             )
             self.players[player_id] = player
+            
+            if faculty in BASE_ROUTER_NAMES.values():
+                self._place_player_at_router(player, faculty)
+
             self._add_event("join", f"{player.name} se conectó.")
-            if self.mission_started_at is None and self.game_status == "playing":
-                self._begin_mission(0, time.monotonic())
             return player
+
+    def start_game(self) -> tuple[bool, str]:
+        with self.lock:
+            if self.game_status != "lobby":
+                return False, "La partida ya está en curso."
+            self.game_status = "playing"
+            self._begin_mission(0, time.monotonic())
+            return True, "¡Partida iniciada!"
 
     def remove_player(self, player_id: int) -> None:
         with self.lock:
@@ -1427,7 +1439,8 @@ class GameServer:
                 raise ProtocolError("El primer mensaje debe ser de tipo 'join'.")
             payload = first.get("payload")
             name = payload.get("name", "") if isinstance(payload, dict) else ""
-            player = self.game.add_player(str(name))
+            faculty = payload.get("faculty", "") if isinstance(payload, dict) else ""
+            player = self.game.add_player(str(name), str(faculty))
             if player is None:
                 send_message(
                     connection,
@@ -1469,6 +1482,9 @@ class GameServer:
                     interaction_result = {"success": success, "message": text}
                 elif message_type == "restart":
                     success, text = self.game.restart_campaign()
+                    interaction_result = {"success": success, "message": text}
+                elif message_type == "start_game":
+                    success, text = self.game.start_game()
                     interaction_result = {"success": success, "message": text}
                 elif message_type == "disconnect":
                     break
