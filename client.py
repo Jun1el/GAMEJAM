@@ -1230,6 +1230,46 @@ class GameClient:
                 (14, map_height + 180),
             )
 
+    def _get_dog_surface(self, state: str, size: int) -> __import__("pygame").Surface:
+        if not hasattr(self, "_dog_cache"):
+            self._dog_cache = {}
+        key = (state, size)
+        if key in self._dog_cache:
+            return self._dog_cache[key]
+        
+        # Matriz pixel art retro de perro 8x7
+        # 0 = transparente, 1 = borde, 2 = color principal, 3 = detalles (ojos/nariz)
+        matrix = [
+            [0, 1, 1, 0, 0, 1, 1, 0],
+            [1, 2, 2, 1, 1, 2, 2, 1],
+            [1, 2, 2, 2, 2, 2, 2, 1],
+            [1, 3, 2, 2, 2, 2, 3, 1],
+            [1, 2, 2, 3, 3, 2, 2, 1],
+            [0, 1, 2, 2, 2, 2, 1, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],
+        ]
+        
+        base_color = COLORS["dog_sleep"] if state == "sleeping" else COLORS["dog_chase"]
+        
+        import pygame
+        surf = pygame.Surface((8, 7), pygame.SRCALPHA)
+        for y, row in enumerate(matrix):
+            for x, val in enumerate(row):
+                if val == 1:
+                    surf.set_at((x, y), COLORS["wall"])
+                elif val == 2:
+                    surf.set_at((x, y), base_color)
+                elif val == 3:
+                    if state == "chasing":
+                        # Ojos rojos/borde cuando persigue para dar más miedo
+                        surf.set_at((x, y), COLORS["text"])
+                    else:
+                        surf.set_at((x, y), COLORS["wall"])
+        
+        scaled = pygame.transform.scale(surf, (size, int(size * (7/8))))
+        self._dog_cache[key] = scaled
+        return scaled
+
     def _draw_dogs(self) -> None:
         assert self.screen is not None
         for dog in self.state.get("dogs", {}).values():
@@ -1237,17 +1277,15 @@ class GameClient:
                 continue
             center = self._world_to_screen(dog["x"], dog["y"])
             if dog["state"] == "sleeping":
-                pygame.draw.circle(self.screen, COLORS["dog_sleep"], center, 12)
-                pygame.draw.circle(self.screen, COLORS["wall"], center, 12, 2)
+                dog_surf = self._get_dog_surface("sleeping", 28)
+                self.screen.blit(dog_surf, dog_surf.get_rect(center=center))
                 text = self.small_font.render("Zzz", True, COLORS["text"])
-                self.screen.blit(text, text.get_rect(center=(center[0], center[1] - 16)))
+                self.screen.blit(text, text.get_rect(center=(center[0] + 12, center[1] - 16)))
             else:
-                pulse = 1.0 + 0.15 * __import__("math").sin(pygame.time.get_ticks() / 50.0)
-                r = int(14 * pulse)
-                pygame.draw.circle(self.screen, COLORS["dog_chase"], center, r)
-                pygame.draw.circle(self.screen, COLORS["wall"], center, r, 2)
-                eyes = self.small_font.render(">_<", True, COLORS["text"])
-                self.screen.blit(eyes, eyes.get_rect(center=center))
+                pulse = 1.0 + 0.15 * __import__("math").sin(__import__("pygame").time.get_ticks() / 50.0)
+                size = int(32 * pulse)
+                dog_surf = self._get_dog_surface("chasing", size)
+                self.screen.blit(dog_surf, dog_surf.get_rect(center=center))
 
     def _draw_puddles(self) -> None:
         assert self.screen is not None
