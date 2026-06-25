@@ -32,6 +32,13 @@ conexiones activas.
 
 Al abrir el cliente aparece una pantalla de inicio. Escribe o modifica el
 nombre del jugador y pulsa **Conectar a Eduroam** para entrar a la partida.
+
+### Lobby y Selección de Facultad
+Una vez conectado, ingresarás a un **Lobby** de espera. En esta fase:
+- Podrás elegir la **facultad donde quieres aparecer** al iniciar el juego.
+- Esperarás a que el resto de tu equipo se conecte.
+- Cuando todos estén listos, cualquiera puede pulsar la tecla `Enter` para comenzar la campaña.
+
 La ventana del juego se ajusta automÃ¡ticamente al tamaÃ±o del monitor para no
 quedar escondida bajo la barra de tareas; el HUD conserva su altura y la
 cÃ¡mara reduce el Ã¡rea visible si es necesario.
@@ -136,6 +143,13 @@ en 25 segundos. El minimapa y una flecha **BONUS** ayudan a localizarlos.
 
 El Escudo y el Parche son individuales y se pierden al perder la conexión; el
 Respaldo de Red beneficia a todo el equipo.
+
+### Lluvia en Lima (Goteras)
+
+Ocasionalmente, el clima del campus puede cambiar y comenzará a llover de forma impredecible. Durante estos eventos:
+- Se generarán **charcos de agua celestes** aleatoriamente en los pisos transitables.
+- Debes tener precaución: si estás en movimiento y pisas un charco, **resbalarás**.
+- Resbalar te dejará **ATURDIDO** por 2 segundos (sin poder moverte ni interactuar) y perderás instantáneamente todo el pollo a la brasa que lleves guardado. Si estás quieto sobre el charco, no te resbalarás.
 
 ### Prof. Montalvo y logros secretos
 
