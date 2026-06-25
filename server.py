@@ -124,7 +124,7 @@ FOOD_EVENT_MIN_INTERVAL = 60.0
 FOOD_EVENT_MAX_INTERVAL = 90.0
 FOOD_EVENT_DURATION = 20.0
 SIDE_QUEST_DURATION = 120.0
-MEDICAL_HEAL_PER_SECOND = 12.0
+MEDICAL_HEAL_PER_SECOND = 7.5
 MEDICAL_DAMAGE_COOLDOWN = 2.0
 BOMB_MIN_INTERVAL = 12.0
 BOMB_MAX_INTERVAL = 18.0
@@ -143,6 +143,17 @@ POWERUP_PICKUP_DISTANCE = TILE_SIZE * 0.9
 SHIELD_DURATION = 8.0
 LAG_FREEZE_DURATION = 12.0
 POWERUP_KINDS = ("shield", "instant_repair", "freeze")
+WEATHER_MIN_INTERVAL = 45.0
+WEATHER_MAX_INTERVAL = 75.0
+RAIN_DURATION = 20.0
+PUDDLE_DURATION = 10.0
+STUN_DURATION = 2.0
+PUDDLE_RADIUS = TILE_SIZE * 0.8
+PUDDLE_SPAWN_INTERVAL = 1.5
+DOG_WAKE_RADIUS = TILE_SIZE * 1.5
+DOG_CATCH_RADIUS = TILE_SIZE * 0.8
+DOG_BASE_SPEED = 180.0
+DOG_SPAWN_COUNT = 4
 
 PLAYER_COLORS = ["#4FC3F7", "#FF6F91", "#FFD166", "#A78BFA"]
 SPAWN_TILES = [(row * 2 + 1, col * 2 + 1) for row, col in [
@@ -246,6 +257,7 @@ class Player:
     x: float
     y: float
     color: str
+    faculty: str = ""
     repairs: int = 0
     inputs: dict[str, bool] = field(
         default_factory=lambda: {
@@ -253,6 +265,7 @@ class Player:
             "down": False,
             "left": False,
             "right": False,
+            "sneak": False,
         }
     )
     effect: str | None = None
@@ -266,6 +279,8 @@ class Player:
     chicken_boost_until: float = 0.0
     invulnerable_until: float = 0.0
     healing_blocked_until: float = 0.0
+    stun_until: float = 0.0
+    panic_until: float = 0.0
     instant_repairs: int = 0
     repaired_locations: set[str] = field(default_factory=set)
     achievements: set[str] = field(default_factory=set)
@@ -301,6 +316,24 @@ class Bomb:
 
 
 @dataclass
+class Puddle:
+    puddle_id: int
+    row: int
+    col: int
+    expires_at: float
+
+@dataclass
+class Dog:
+    dog_id: int
+    x: float
+    y: float
+    state: str = "sleeping"
+    target_id: int | None = None
+    home_x: float = 0.0
+    home_y: float = 0.0
+    chase_until: float = 0.0
+
+@dataclass
 class PowerUp:
     powerup_id: int
     row: int
@@ -322,7 +355,7 @@ class GameState:
         self.next_karma_at = time.monotonic() + KARMA_INTERVAL
         self.event_sequence = 0
         self.events: list[dict[str, Any]] = []
-        self.game_status = "playing"
+        self.game_status = "lobby"
         self.result_message = ""
         self.mission_index = 0
         self.mission_started_at: float | None = None
@@ -351,6 +384,15 @@ class GameState:
         )
         self.food_event_sequence = 0
         self.side_quest = dict(self.rng.choice(SIDE_QUESTS))
+        self.weather = "clear"
+        self.weather_until = 0.0
+        self.next_weather_at = time.monotonic() + self.rng.uniform(WEATHER_MIN_INTERVAL, WEATHER_MAX_INTERVAL)
+        self.puddles: dict[int, Puddle] = {}
+        self.next_puddle_id = 1
+        self.next_puddle_at = 0.0
+        self.dogs: dict[int, Dog] = {}
+        self.next_dog_id = 1
+        self._spawn_dogs()
         self.side_quest_status = "available"
         self.side_quest_owner_id: int | None = None
         self.side_quest_progress = 0
@@ -377,6 +419,19 @@ class GameState:
                 facility_type=facility_type,
             )
 
+
+    def _spawn_dogs(self) -> None:
+        self.dogs.clear()
+        candidates = [(r, c) for r, tiles in enumerate(MAPA_UNI) for c, tile in enumerate(tiles) if tile == 0]
+        self.rng.shuffle(candidates)
+        for i in range(min(DOG_SPAWN_COUNT, len(candidates))):
+            r, c = candidates[i]
+            x = (c + 0.5) * TILE_SIZE
+            y = (r + 0.5) * TILE_SIZE
+            dog = Dog(self.next_dog_id, x, y, home_x=x, home_y=y)
+            self.dogs[dog.dog_id] = dog
+            self.next_dog_id += 1
+
     def _add_event(self, kind: str, text: str) -> None:
         self.event_sequence += 1
         self.events.append(
@@ -384,7 +439,7 @@ class GameState:
         )
         self.events = self.events[-20:]
 
-    def add_player(self, name: str) -> Player | None:
+    def add_player(self, name: str, faculty: str = "") -> Player | None:
         with self.lock:
             if len(self.players) >= MAX_PLAYERS:
                 return None
@@ -398,12 +453,23 @@ class GameState:
                 x=col * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
                 y=row * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
                 color=PLAYER_COLORS[(player_id - 1) % len(PLAYER_COLORS)],
+                faculty=faculty,
             )
             self.players[player_id] = player
+            
+            if faculty in BASE_ROUTER_NAMES.values():
+                self._place_player_at_router(player, faculty)
+
             self._add_event("join", f"{player.name} se conectó.")
-            if self.mission_started_at is None and self.game_status == "playing":
-                self._begin_mission(0, time.monotonic())
             return player
+
+    def start_game(self) -> tuple[bool, str]:
+        with self.lock:
+            if self.game_status != "lobby":
+                return False, "La partida ya está en curso."
+            self.game_status = "playing"
+            self._begin_mission(0, time.monotonic())
+            return True, "¡Partida iniciada!"
 
     def remove_player(self, player_id: int) -> None:
         with self.lock:
@@ -594,10 +660,13 @@ class GameState:
             if now < player.chicken_boost_until
             else 1.0
         )
+        panic_multiplier = 1.5 if now < player.panic_until else 1.0
+        sneak_multiplier = 0.5 if player.inputs.get("sneak", False) else 1.0
+        
         return min(
             MAX_TOTAL_SPEED_MULTIPLIER,
-            fatigue_multiplier * karma_multiplier * chicken_multiplier,
-        )
+            fatigue_multiplier * karma_multiplier * chicken_multiplier * panic_multiplier,
+        ) * sneak_multiplier
 
     def _end_in_defeat(self, message: str) -> None:
         """Termina la campaña en derrota con el mensaje indicado."""
@@ -621,19 +690,18 @@ class GameState:
         return True
 
     def _eliminate_player(self, player: Player) -> None:
-        """Saca de juego al jugador; si ya no queda nadie, hay derrota."""
+        """Saca de juego al jugador y termina la partida."""
         player.alive = False
         player.effect = None
         for key in player.inputs:
             player.inputs[key] = False
         self._add_event(
             "eliminated",
-            f"{player.name} se quedó sin conexión y quedó fuera de juego.",
+            f"{player.name} se quedó sin vida.",
         )
-        if all(not other.alive for other in self.players.values()):
-            self._end_in_defeat(
-                "Todo el equipo perdió la conexión. La red Eduroam colapsó."
-            )
+        self._end_in_defeat(
+            "Perdiste, te jaló el Prof. Lara"
+        )
 
     def consume_chicken(
         self, player_id: int, now: float | None = None
@@ -821,6 +889,122 @@ class GameState:
             )
         self._add_event("powerup", text)
 
+    def _update_dogs(self, dt: float, now: float) -> None:
+        for dog in self.dogs.values():
+            if dog.state == "sleeping":
+                closest_player = None
+                min_dist = DOG_WAKE_RADIUS
+                for pid, player in self.players.items():
+                    if not player.alive: continue
+                    moving = any(v for k, v in player.inputs.items() if k in ["up", "down", "left", "right"])
+                    sneak = player.inputs.get("sneak", False)
+                    if moving and not sneak:
+                        cx, cy = self._player_center(player)
+                        dist = math.hypot(cx - dog.x, cy - dog.y)
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_player = player
+                if closest_player:
+                    dog.state = "chasing"
+                    dog.target_id = closest_player.player_id
+                    dog.chase_until = now + 3.0
+            
+            elif dog.state == "chasing":
+                target = self.players.get(dog.target_id)
+                if not target or not target.alive:
+                    dog.state = "returning"
+                    dog.target_id = None
+                    continue
+                
+                cx, cy = self._player_center(target)
+                dist = math.hypot(cx - dog.x, cy - dog.y)
+                
+                # Give target panic
+                target.panic_until = now + 0.2
+                
+                if dist <= DOG_CATCH_RADIUS:
+                    if target.chicken_portions > 0:
+                        target.chicken_portions = 0
+                        target.chicken_contaminated = False
+                        self._add_event("dog_steal", f"¡Un Firulais le robó el pollo a {target.name}!")
+                    else:
+                        target.health = max(0.0, target.health - 15.0)
+                        self._add_event("dog_bite", f"¡Un Firulais mordió a {target.name}! (-15 Vida)")
+                    dog.state = "returning"
+                    dog.target_id = None
+                elif now >= getattr(dog, 'chase_until', 0.0):
+                    dog.state = "returning"
+                    dog.target_id = None
+                else:
+                    # Move towards target
+                    dx, dy = cx - dog.x, cy - dog.y
+                    mag = math.hypot(dx, dy)
+                    if mag > 0:
+                        dog.x += (dx / mag) * DOG_BASE_SPEED * dt
+                        dog.y += (dy / mag) * DOG_BASE_SPEED * dt
+            
+            elif dog.state == "returning":
+                dx, dy = dog.home_x - dog.x, dog.home_y - dog.y
+                mag = math.hypot(dx, dy)
+                if mag < 5.0:
+                    dog.x = dog.home_x
+                    dog.y = dog.home_y
+                    dog.state = "sleeping"
+                else:
+                    dog.x += (dx / mag) * DOG_BASE_SPEED * 0.8 * dt
+                    dog.y += (dy / mag) * DOG_BASE_SPEED * 0.8 * dt
+
+    def _spawn_puddle(self, now: float) -> None:
+        candidates = [
+            (r, c)
+            for r, tiles in enumerate(MAPA_UNI)
+            for c, tile in enumerate(tiles)
+            if tile == 0
+        ]
+        if not candidates: return
+        r, c = self.rng.choice(candidates)
+        puddle = Puddle(self.next_puddle_id, r, c, now + PUDDLE_DURATION)
+        self.next_puddle_id += 1
+        self.puddles[puddle.puddle_id] = puddle
+
+    def _update_weather_and_puddles(self, now: float) -> None:
+        if self.weather == "rain" and now >= self.weather_until:
+            self.weather = "clear"
+            self.next_weather_at = now + self.rng.uniform(WEATHER_MIN_INTERVAL, WEATHER_MAX_INTERVAL)
+            self._add_event("weather", "La lluvia se detuvo. Eduroam se está secando.")
+        elif self.weather == "clear" and now >= self.next_weather_at:
+            self.weather = "rain"
+            self.weather_until = now + RAIN_DURATION
+            self._add_event("weather", "¡Lluvia en Lima! Cuidado con las goteras.")
+            self.next_puddle_at = now
+
+        if self.weather == "rain" and now >= self.next_puddle_at:
+            self._spawn_puddle(now)
+            self.next_puddle_at = now + PUDDLE_SPAWN_INTERVAL
+
+        for puddle in list(self.puddles.values()):
+            if now >= puddle.expires_at:
+                del self.puddles[puddle.puddle_id]
+
+        for puddle in list(self.puddles.values()):
+            puddle_x = (puddle.col + 0.5) * TILE_SIZE
+            puddle_y = (puddle.row + 0.5) * TILE_SIZE
+            for player in self.players.values():
+                if not player.alive or now < player.stun_until:
+                    continue
+                moving = any(player.inputs.values())
+                if not moving:
+                    continue
+                cx, cy = self._player_center(player)
+                if math.hypot(cx - puddle_x, cy - puddle_y) <= PUDDLE_RADIUS:
+                    player.stun_until = now + STUN_DURATION
+                    if player.chicken_portions > 0:
+                        player.chicken_portions = 0
+                        player.chicken_contaminated = False
+                        self._add_event("slip", f"{player.name} resbaló en un charco y perdió su pollo a la brasa.")
+                    else:
+                        self._add_event("slip", f"{player.name} resbaló en un charco.")
+
     def _update_powerups(self, now: float) -> None:
         for powerup in list(self.powerups.values()):
             if now >= powerup.expires_at:
@@ -882,6 +1066,11 @@ class GameState:
         self.mission_repaired.clear()
         self.route_progress = 0
         self.hold_started_at = None
+        
+        if index == 1:
+            self._spawn_dogs()
+        else:
+            self.dogs.clear()
 
         if index == 1:
             self.critical_route = self.rng.sample(
@@ -984,6 +1173,8 @@ class GameState:
                 player.chicken_boost_until = 0.0
                 player.invulnerable_until = 0.0
                 player.healing_blocked_until = 0.0
+                player.stun_until = 0.0
+                player.panic_until = 0.0
                 player.instant_repairs = 0
                 player.repaired_locations.clear()
                 player.achievements.clear()
@@ -993,6 +1184,13 @@ class GameState:
                 self._reset_router(router)
             self.bombs.clear()
             self.powerups.clear()
+            self.weather = "clear"
+            self.weather_until = 0.0
+            self.next_weather_at = now + self.rng.uniform(WEATHER_MIN_INTERVAL, WEATHER_MAX_INTERVAL)
+            self.puddles.clear()
+            
+            self._spawn_dogs()
+                
             self.next_powerup_at = now + self.rng.uniform(
                 POWERUP_MIN_INTERVAL, POWERUP_MAX_INTERVAL
             )
@@ -1039,6 +1237,8 @@ class GameState:
         return False
 
     def _move_player(self, player: Player, dt: float, now: float) -> None:
+        if now < player.stun_until:
+            return
         if player.effect and now >= player.effect_until:
             player.effect = None
             player.effect_until = 0.0
@@ -1079,6 +1279,8 @@ class GameState:
             self._update_food_event(now)
             self._update_bombs(now)
             self._update_powerups(now)
+            self._update_weather_and_puddles(now)
+            self._update_dogs(dt, now)
             self._update_side_quest(now)
             if (
                 self.mission_started_at is not None
@@ -1287,6 +1489,9 @@ class GameState:
                         "invulnerable_remaining": round(
                             max(0.0, player.invulnerable_until - now), 1
                         ),
+                        "stun_remaining": round(
+                            max(0.0, player.stun_until - now), 1
+                        ),
                         "instant_repairs": player.instant_repairs,
                         "achievements": [
                             {
@@ -1394,6 +1599,24 @@ class GameState:
                 },
                 "karma_in": round(max(0.0, self.next_karma_at - now), 1),
                 "max_repaired": MAX_REPAIRED_ROUTERS,
+                "weather": self.weather,
+                "dogs": {
+                    str(pid): {
+                        "id": d.dog_id,
+                        "x": round(d.x, 1),
+                        "y": round(d.y, 1),
+                        "state": d.state
+                    } for pid, d in self.dogs.items()
+                },
+                "puddles": {
+                    str(pid): {
+                        "id": p.puddle_id,
+                        "row": p.row,
+                        "col": p.col,
+                        "expires_in": round(max(0.0, p.expires_at - now), 1)
+                    }
+                    for pid, p in self.puddles.items()
+                },
                 "game_status": self.game_status,
                 "mission": self._mission_snapshot(now),
                 "result_message": self.result_message,
@@ -1427,7 +1650,8 @@ class GameServer:
                 raise ProtocolError("El primer mensaje debe ser de tipo 'join'.")
             payload = first.get("payload")
             name = payload.get("name", "") if isinstance(payload, dict) else ""
-            player = self.game.add_player(str(name))
+            faculty = payload.get("faculty", "") if isinstance(payload, dict) else ""
+            player = self.game.add_player(str(name), str(faculty))
             if player is None:
                 send_message(
                     connection,
@@ -1469,6 +1693,9 @@ class GameServer:
                     interaction_result = {"success": success, "message": text}
                 elif message_type == "restart":
                     success, text = self.game.restart_campaign()
+                    interaction_result = {"success": success, "message": text}
+                elif message_type == "start_game":
+                    success, text = self.game.start_game()
                     interaction_result = {"success": success, "message": text}
                 elif message_type == "disconnect":
                     break

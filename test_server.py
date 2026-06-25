@@ -28,6 +28,7 @@ from server import (
 class GameStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.game = GameState(random.Random(7))
+        self.game.start_game()
 
     def repair(
         self, player, router_name: str, now: float = 10.0
@@ -256,7 +257,7 @@ class GameStateTests(unittest.TestCase):
         self.game.bombs[bomb_id] = Bomb(bomb_id, row, col, explode_at=now)
         self.game.next_bomb_at = 999.0
 
-    def test_losing_all_health_eliminates_only_that_player(self) -> None:
+    def test_losing_all_health_eliminates_team(self) -> None:
         ada = self.game.add_player("Ada")
         ben = self.game.add_player("Ben")
         assert ada is not None and ben is not None
@@ -270,8 +271,7 @@ class GameStateTests(unittest.TestCase):
         self.assertEqual(ada.health, 0.0)
         self.assertFalse(ada.alive)
         self.assertTrue(ben.alive)
-        # El equipo conserva un superviviente: la campaña continúa.
-        self.assertEqual(self.game.game_status, "playing")
+        self.assertEqual(self.game.game_status, "defeat")
         self.assertTrue(
             any(
                 event["kind"] == "eliminated" and "Ada" in event["text"]
@@ -279,11 +279,10 @@ class GameStateTests(unittest.TestCase):
             )
         )
 
-    def test_defeat_only_when_all_players_are_eliminated(self) -> None:
+    def test_defeat_when_any_player_is_eliminated(self) -> None:
         ada = self.game.add_player("Ada")
         ben = self.game.add_player("Ben")
         assert ada is not None and ben is not None
-        ada.alive = False  # Ada ya estaba fuera.
         ben.health = BOMB_DAMAGE
         self._explode_bomb_on(ben)
 
@@ -540,6 +539,180 @@ class GameStateTests(unittest.TestCase):
             state["players"][str(player.player_id)]["chicken_pickup_cooldown"],
             15.0,
         )
+
+
+
+    def test_rain_event_creates_puddles(self) -> None:
+        # Start rain manually
+        self.game.weather = "rain"
+        self.game.weather_until = 20.0
+        self.game.next_puddle_at = 10.0
+        
+        # Spawn puddle
+        self.game._update_weather_and_puddles(now=10.0)
+        self.assertTrue(len(self.game.puddles) > 0)
+        self.assertEqual(self.game.next_puddle_at, 10.0 + 1.5) # PUDDLE_SPAWN_INTERVAL
+
+    def test_player_slips_on_puddle_losing_chicken_and_getting_stunned(self) -> None:
+        player = self.game.add_player("PuddleSlipping")
+        assert player is not None
+        player.chicken_portions = 2
+        
+        # Make player move
+        player.inputs["right"] = True
+        
+        self.game.weather = "rain"
+        self.game.weather_until = 20.0
+        self.game.next_puddle_at = 10.0
+        self.game._spawn_puddle(now=10.0)
+        
+        # Force a puddle under the player
+        puddle = next(iter(self.game.puddles.values()))
+        player.x = (puddle.col + 0.5) * 32 # TILE_SIZE
+        player.y = (puddle.row + 0.5) * 32
+        
+        # Update
+        self.game._update_weather_and_puddles(now=10.5)
+        
+        self.assertEqual(player.chicken_portions, 0)
+        self.assertEqual(player.stun_until, 10.5 + 2.0) # STUN_DURATION
+        
+        # Ensure stun blocks movement
+        original_x = player.x
+        self.game._move_player(player, 0.1, 11.0)
+        self.assertEqual(player.x, original_x) # shouldn't move
+
+
+
+    def test_dog_wakes_up_when_player_moves_nearby_without_sneak(self) -> None:
+        self.game.dogs.clear()
+        
+        dog = __import__("server").Dog(1, 100.0, 100.0, "sleeping", home_x=100.0, home_y=100.0)
+        self.game.dogs[1] = dog
+        
+        player = self.game.add_player("Test")
+        assert player is not None
+        player.x, player.y = 110.0, 110.0
+        
+        # Player is moving without sneak
+        player.inputs["right"] = True
+        player.inputs["sneak"] = False
+        
+        self.game._update_dogs(0.1, 10.0)
+        
+        self.assertEqual(dog.state, "chasing")
+        self.assertEqual(dog.target_id, player.player_id)
+        
+    def test_dog_ignores_sneaking_player(self) -> None:
+        self.game.dogs.clear()
+        
+        dog = __import__("server").Dog(1, 100.0, 100.0, "sleeping", home_x=100.0, home_y=100.0)
+        self.game.dogs[1] = dog
+        
+        player = self.game.add_player("Test")
+        assert player is not None
+        player.x, player.y = 110.0, 110.0
+        
+        # Player is sneaking
+        player.inputs["right"] = True
+        player.inputs["sneak"] = True
+        
+        self.game._update_dogs(0.1, 10.0)
+        
+        self.assertEqual(dog.state, "sleeping")
+        self.assertIsNone(dog.target_id)
+        
+    def test_dog_steals_chicken_and_returns_to_sleep(self) -> None:
+        self.game.dogs.clear()
+        
+        dog = __import__("server").Dog(1, 100.0, 100.0, "chasing", home_x=100.0, home_y=100.0)
+        self.game.dogs[1] = dog
+        
+        player = self.game.add_player("Test")
+        assert player is not None
+        dog.target_id = player.player_id
+        
+        # Player is right on the dog
+        player.x, player.y = 100.0, 100.0
+        player.chicken_portions = 2
+        
+        self.game._update_dogs(0.1, 10.0)
+        
+        self.assertEqual(player.chicken_portions, 0)
+        self.assertEqual(dog.state, "returning")
+        self.assertIsNone(dog.target_id)
+        
+    def test_panic_speed_boost_applied(self) -> None:
+        player = self.game.add_player("Test")
+        assert player is not None
+        
+        # Normal speed
+        player.x, player.y = 1510.0, 166.0
+        player.inputs["right"] = True
+        x1 = player.x
+        self.game._move_player(player, 0.01, 10.0)
+        speed_normal = (player.x - x1) / 0.01
+        
+        # Sneak speed
+        player.x, player.y = 1510.0, 166.0
+        player.inputs["sneak"] = True
+        x2 = player.x
+        self.game._move_player(player, 0.01, 11.0)
+        speed_sneak = (player.x - x2) / 0.01
+        self.assertTrue(speed_sneak < speed_normal)
+        
+        # Panic speed
+        player.x, player.y = 1510.0, 166.0
+        player.inputs["sneak"] = False
+        player.panic_until = 20.0
+        x3 = player.x
+        self.game._move_player(player, 0.01, 12.0)
+        speed_panic = (player.x - x3) / 0.01
+        self.assertTrue(speed_panic > speed_normal)
+
+
+
+    def test_dog_bites_player_without_chicken(self) -> None:
+        self.game.dogs.clear()
+        
+        dog = __import__("server").Dog(1, 100.0, 100.0, "chasing", home_x=100.0, home_y=100.0)
+        self.game.dogs[1] = dog
+        
+        player = self.game.add_player("Test")
+        assert player is not None
+        dog.target_id = player.player_id
+        
+        player.x, player.y = 100.0, 100.0
+        player.chicken_portions = 0
+        player.health = 100.0
+        
+        self.game._update_dogs(0.1, 10.0)
+        
+        self.assertEqual(player.health, 85.0)
+        self.assertEqual(dog.state, "returning")
+        self.assertIsNone(dog.target_id)
+        
+    def test_dog_stops_chasing_after_3_seconds(self) -> None:
+        self.game.dogs.clear()
+        
+        dog = __import__("server").Dog(1, 100.0, 100.0, "chasing", home_x=100.0, home_y=100.0)
+        dog.chase_until = 12.0
+        self.game.dogs[1] = dog
+        
+        player = self.game.add_player("Test")
+        assert player is not None
+        dog.target_id = player.player_id
+        
+        # Player is far away
+        player.x, player.y = 500.0, 500.0
+        
+        # Time is before 12.0 -> continues chasing
+        self.game._update_dogs(0.1, 11.0)
+        self.assertEqual(dog.state, "chasing")
+        
+        # Time is after 12.0 -> gives up
+        self.game._update_dogs(0.1, 12.5)
+        self.assertEqual(dog.state, "returning")
 
 
 if __name__ == "__main__":

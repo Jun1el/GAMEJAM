@@ -31,6 +31,8 @@ EVENT_SOUNDS = {
     "bomb": "bomb",
     "eliminated": "fail",
     "victory": "misioncomplete",
+    "weather": "pickup",
+    "slip": "fail",
 }
 
 # Estilo visual de cada power-up: color e inicial mostrada en el icono.
@@ -81,8 +83,15 @@ COLORS = {
     "medical": (75, 220, 145),
     "professor": (190, 120, 255),
     "food_bad": (135, 200, 70),
+    "puddle": (60, 150, 220),
+    "dog_sleep": (139, 69, 19),
+    "dog_chase": (220, 50, 30),
 }
 
+FACULTIES = [
+    "FIGMM", "FIEE", "BIBLIOTECA", "FIEECS", "FIC", "FIA", "FIQT", 
+    "CTIC", "FIM", "FIIS", "FC", "ESTADIO UNI", "FAUA", "FIP", "ENTRADA", "SALIDA"
+]
 
 def parse_hex_color(value: str) -> tuple[int, int, int]:
     value = value.lstrip("#")
@@ -113,6 +122,7 @@ class GameClient:
         self.camera_y = 0.0
         self.damage_flash_until = 0
         self.last_food_event_sequence = 0
+        self.faculty_index = 0
 
         pygame.init()
         self._configure_window_sizes()
@@ -192,7 +202,7 @@ class GameClient:
 
     def _draw_start_screen(
         self, name_active: bool, play_hovered: bool, pulse: float
-    ) -> tuple[pygame.Rect, pygame.Rect]:
+    ) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect]:
         assert self.screen is not None
         self.screen.fill(COLORS["background"])
 
@@ -262,8 +272,8 @@ class GameClient:
             self.screen.blit(rendered, (75, 350 + index * 25))
 
         name_label = self.font.render("NOMBRE DEL JUGADOR", True, COLORS["muted"])
-        self.screen.blit(name_label, (55, 458))
-        name_rect = pygame.Rect(55, 482, 500, 52)
+        self.screen.blit(name_label, (55, 430))
+        name_rect = pygame.Rect(55, 452, 280, 52)
         pygame.draw.rect(self.screen, COLORS["input"], name_rect, border_radius=9)
         pygame.draw.rect(
             self.screen,
@@ -291,13 +301,23 @@ class GameClient:
                 2,
             )
 
-        play_rect = pygame.Rect(585, 482, 260, 52)
+        fac_label = self.font.render("FACULTAD (Clic)", True, COLORS["muted"])
+        self.screen.blit(fac_label, (345, 430))
+        fac_rect = pygame.Rect(345, 452, 220, 52)
+        pygame.draw.rect(self.screen, COLORS["panel"], fac_rect, border_radius=9)
+        pygame.draw.rect(
+            self.screen, COLORS["wall_edge"], fac_rect, 2, border_radius=9
+        )
+        fac_surface = self.menu_font.render(FACULTIES[self.faculty_index], True, COLORS["accent"])
+        self.screen.blit(fac_surface, (fac_rect.x + 15, fac_rect.y + 15))
+
+        play_rect = pygame.Rect(575, 452, 270, 52)
         button_color = (
             COLORS["uni_blue_light"] if play_hovered else COLORS["uni_blue"]
         )
         pygame.draw.rect(self.screen, button_color, play_rect, border_radius=9)
         play = self.menu_subtitle_font.render(
-            "CONECTAR A EDUROAM", True, COLORS["text"]
+            "LISTO", True, COLORS["text"]
         )
         self.screen.blit(play, play.get_rect(center=play_rect.center))
 
@@ -306,8 +326,8 @@ class GameClient:
             True,
             COLORS["muted"],
         )
-        self.screen.blit(footer, footer.get_rect(center=(START_WIDTH // 2, 570)))
-        return name_rect, play_rect
+        self.screen.blit(footer, footer.get_rect(center=(START_WIDTH // 2, 530)))
+        return name_rect, play_rect, fac_rect
 
     def show_start_screen(self) -> bool:
         """Muestra la portada y devuelve True cuando el jugador decide entrar."""
@@ -316,10 +336,10 @@ class GameClient:
 
         while True:
             mouse_position = pygame.mouse.get_pos()
-            play_hovered = pygame.Rect(585, 482, 260, 52).collidepoint(
+            play_hovered = pygame.Rect(575, 452, 270, 52).collidepoint(
                 mouse_position
             )
-            name_rect, play_rect = self._draw_start_screen(
+            name_rect, play_rect, fac_rect = self._draw_start_screen(
                 name_active, play_hovered, elapsed
             )
             pygame.display.flip()
@@ -340,6 +360,8 @@ class GameClient:
                             self.name += event.unicode
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     name_active = name_rect.collidepoint(event.pos)
+                    if fac_rect.collidepoint(event.pos):
+                        self.faculty_index = (self.faculty_index + 1) % len(FACULTIES)
                     if play_rect.collidepoint(event.pos) and self.name.strip():
                         self.name = self.name.strip()
                         return True
@@ -355,7 +377,7 @@ class GameClient:
         response = self.network.request(
             {
                 "type": "join",
-                "payload": {"name": self.name},
+                "payload": {"name": self.name, "faculty": FACULTIES[self.faculty_index]},
                 "request_id": self._next_request_id(),
             }
         )
@@ -389,6 +411,7 @@ class GameClient:
             "down": keys[pygame.K_s] or keys[pygame.K_DOWN],
             "left": keys[pygame.K_a] or keys[pygame.K_LEFT],
             "right": keys[pygame.K_d] or keys[pygame.K_RIGHT],
+            "sneak": keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT],
         }
 
     def _exchange(self, message_type: str, payload: dict[str, Any]) -> None:
@@ -592,6 +615,10 @@ class GameClient:
 
             label = self.small_font.render(player["name"], True, COLORS["text"])
             self.screen.blit(label, label.get_rect(midbottom=(rect.centerx, rect.top - 2)))
+            
+            if player.get("stun_remaining", 0) > 0:
+                stun_label = self.small_font.render("ATURDIDO", True, COLORS["defeat"])
+                self.screen.blit(stun_label, stun_label.get_rect(midbottom=(rect.centerx, rect.top - 14)))
 
     def _draw_bombs(self) -> None:
         assert self.screen is not None
@@ -1203,6 +1230,89 @@ class GameClient:
                 (14, map_height + 180),
             )
 
+    def _get_dog_surface(self, state: str, size: int) -> __import__("pygame").Surface:
+        if not hasattr(self, "_dog_cache"):
+            self._dog_cache = {}
+        key = (state, size)
+        if key in self._dog_cache:
+            return self._dog_cache[key]
+        
+        # Matriz pixel art retro de perro 8x7
+        # 0 = transparente, 1 = borde, 2 = color principal, 3 = detalles (ojos/nariz)
+        matrix = [
+            [0, 1, 1, 0, 0, 1, 1, 0],
+            [1, 2, 2, 1, 1, 2, 2, 1],
+            [1, 2, 2, 2, 2, 2, 2, 1],
+            [1, 3, 2, 2, 2, 2, 3, 1],
+            [1, 2, 2, 3, 3, 2, 2, 1],
+            [0, 1, 2, 2, 2, 2, 1, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],
+        ]
+        
+        base_color = COLORS["dog_sleep"] if state == "sleeping" else COLORS["dog_chase"]
+        
+        import pygame
+        surf = pygame.Surface((8, 7), pygame.SRCALPHA)
+        for y, row in enumerate(matrix):
+            for x, val in enumerate(row):
+                if val == 1:
+                    surf.set_at((x, y), COLORS["wall"])
+                elif val == 2:
+                    surf.set_at((x, y), base_color)
+                elif val == 3:
+                    if state == "chasing":
+                        # Ojos rojos/borde cuando persigue para dar más miedo
+                        surf.set_at((x, y), COLORS["text"])
+                    else:
+                        surf.set_at((x, y), COLORS["wall"])
+        
+        scaled = pygame.transform.scale(surf, (size, int(size * (7/8))))
+        self._dog_cache[key] = scaled
+        return scaled
+
+    def _draw_dogs(self) -> None:
+        assert self.screen is not None
+        for dog in self.state.get("dogs", {}).values():
+            if not self._point_visible(dog["x"], dog["y"]):
+                continue
+            center = self._world_to_screen(dog["x"], dog["y"])
+            if dog["state"] == "sleeping":
+                dog_surf = self._get_dog_surface("sleeping", 28)
+                self.screen.blit(dog_surf, dog_surf.get_rect(center=center))
+                text = self.small_font.render("Zzz", True, COLORS["text"])
+                self.screen.blit(text, text.get_rect(center=(center[0] + 12, center[1] - 16)))
+            else:
+                pulse = 1.0 + 0.15 * __import__("math").sin(__import__("pygame").time.get_ticks() / 50.0)
+                size = int(32 * pulse)
+                dog_surf = self._get_dog_surface("chasing", size)
+                self.screen.blit(dog_surf, dog_surf.get_rect(center=center))
+
+    def _draw_puddles(self) -> None:
+        assert self.screen is not None
+        for puddle in self.state.get("puddles", {}).values():
+            world_center = (
+                (puddle["col"] + 0.5) * self.tile_size,
+                (puddle["row"] + 0.5) * self.tile_size,
+            )
+            if not self._point_visible(*world_center):
+                continue
+            center = self._world_to_screen(*world_center)
+            radius_x = int(self.tile_size * 0.8)
+            radius_y = int(self.tile_size * 0.6)
+            rect = pygame.Rect(center[0] - radius_x, center[1] - radius_y, radius_x * 2, radius_y * 2)
+            pygame.draw.ellipse(self.screen, COLORS["puddle"], rect)
+            pygame.draw.ellipse(self.screen, COLORS["uni_blue"], rect, 2)
+
+    def _draw_rain(self) -> None:
+        assert self.screen is not None
+        if self.state.get("weather") != "rain":
+            return
+        time_offset = pygame.time.get_ticks() / 10.0
+        for i in range(100):
+            x = (i * 73 + time_offset * 15) % GAME_WIDTH
+            y = (i * 37 + time_offset * 30) % VIEWPORT_HEIGHT
+            pygame.draw.line(self.screen, (150, 180, 220, 100), (x, y), (x - 10, y + 20), 1)
+
     def _draw_damage_flash(self) -> None:
         assert self.screen is not None
         if pygame.time.get_ticks() >= self.damage_flash_until:
@@ -1235,6 +1345,22 @@ class GameClient:
             "Quedaste fuera de juego. Tu equipo sigue conectado; observa hasta el final.",
             True,
             COLORS["defeat"],
+        )
+        self.screen.blit(
+            text, text.get_rect(center=(GAME_WIDTH // 2, VIEWPORT_HEIGHT - 23))
+        )
+
+    def _draw_lobby_banner(self) -> None:
+        assert self.screen is not None
+        if self.state.get("game_status") != "lobby":
+            return
+        banner = pygame.Surface((GAME_WIDTH, 46), pygame.SRCALPHA)
+        banner.fill((10, 20, 40, 200))
+        self.screen.blit(banner, (0, VIEWPORT_HEIGHT - 46))
+        text = self.title_font.render(
+            "Esperando a otros jugadores... Pulsa ENTER para Iniciar",
+            True,
+            COLORS["accent"],
         )
         self.screen.blit(
             text, text.get_rect(center=(GAME_WIDTH // 2, VIEWPORT_HEIGHT - 23))
@@ -1300,6 +1426,8 @@ class GameClient:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    elif self.state.get("game_status") == "lobby" and event.key == pygame.K_RETURN:
+                        self._exchange("start_game", {})
                     elif game_over and event.key in (pygame.K_r, pygame.K_RETURN):
                         restart = True
                     elif not game_over and event.key == pygame.K_e:
@@ -1336,17 +1464,21 @@ class GameClient:
             self._draw_routers()
             self._draw_facilities()
             self._draw_professor()
+            self._draw_puddles()
             self._draw_bombs()
             self._draw_powerups()
+            self._draw_dogs()
             self._draw_players()
             self._draw_navigation_arrows()
             self._draw_minimap()
             self._draw_side_quest()
             self._draw_food_event_alert()
+            self._draw_rain()
             self._draw_damage_flash()
             self.screen.set_clip(None)
             self._draw_hud()
             self._draw_spectator_banner()
+            self._draw_lobby_banner()
             self._draw_end_overlay()
             pygame.display.flip()
             self.clock.tick(FPS)
