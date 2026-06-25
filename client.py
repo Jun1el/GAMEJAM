@@ -84,6 +84,8 @@ COLORS = {
     "professor": (190, 120, 255),
     "food_bad": (135, 200, 70),
     "puddle": (60, 150, 220),
+    "dog_sleep": (139, 69, 19),
+    "dog_chase": (220, 50, 30),
 }
 
 FACULTIES = [
@@ -409,6 +411,7 @@ class GameClient:
             "down": keys[pygame.K_s] or keys[pygame.K_DOWN],
             "left": keys[pygame.K_a] or keys[pygame.K_LEFT],
             "right": keys[pygame.K_d] or keys[pygame.K_RIGHT],
+            "sneak": keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT],
         }
 
     def _exchange(self, message_type: str, payload: dict[str, Any]) -> None:
@@ -1227,6 +1230,25 @@ class GameClient:
                 (14, map_height + 180),
             )
 
+    def _draw_dogs(self) -> None:
+        assert self.screen is not None
+        for dog in self.state.get("dogs", {}).values():
+            if not self._point_visible(dog["x"], dog["y"]):
+                continue
+            center = self._world_to_screen(dog["x"], dog["y"])
+            if dog["state"] == "sleeping":
+                pygame.draw.circle(self.screen, COLORS["dog_sleep"], center, 12)
+                pygame.draw.circle(self.screen, COLORS["wall"], center, 12, 2)
+                text = self.small_font.render("Zzz", True, COLORS["text"])
+                self.screen.blit(text, text.get_rect(center=(center[0], center[1] - 16)))
+            else:
+                pulse = 1.0 + 0.15 * __import__("math").sin(pygame.time.get_ticks() / 50.0)
+                r = int(14 * pulse)
+                pygame.draw.circle(self.screen, COLORS["dog_chase"], center, r)
+                pygame.draw.circle(self.screen, COLORS["wall"], center, r, 2)
+                eyes = self.small_font.render(">_<", True, COLORS["text"])
+                self.screen.blit(eyes, eyes.get_rect(center=center))
+
     def _draw_puddles(self) -> None:
         assert self.screen is not None
         for puddle in self.state.get("puddles", {}).values():
@@ -1407,6 +1429,7 @@ class GameClient:
             self._draw_puddles()
             self._draw_bombs()
             self._draw_powerups()
+            self._draw_dogs()
             self._draw_players()
             self._draw_navigation_arrows()
             self._draw_minimap()
