@@ -690,7 +690,7 @@ class GameState:
         return True
 
     def _eliminate_player(self, player: Player) -> None:
-        """Saca de juego al jugador y termina la partida."""
+        """Saca de juego al jugador; la campaña solo termina si nadie sigue vivo."""
         player.alive = False
         player.effect = None
         for key in player.inputs:
@@ -699,9 +699,12 @@ class GameState:
             "eliminated",
             f"{player.name} se quedó sin vida.",
         )
-        self._end_in_defeat(
-            "Perdiste, te jaló el Prof. Lara"
-        )
+        # La derrota es compartida: el equipo solo pierde cuando todos los
+        # jugadores conectados han quedado fuera de juego.
+        if self.players and not any(p.alive for p in self.players.values()):
+            self._end_in_defeat(
+                "Perdiste, te jaló el Prof. Lara"
+            )
 
     def consume_chicken(
         self, player_id: int, now: float | None = None

@@ -257,7 +257,7 @@ class GameStateTests(unittest.TestCase):
         self.game.bombs[bomb_id] = Bomb(bomb_id, row, col, explode_at=now)
         self.game.next_bomb_at = 999.0
 
-    def test_losing_all_health_eliminates_team(self) -> None:
+    def test_one_player_down_keeps_campaign_alive(self) -> None:
         ada = self.game.add_player("Ada")
         ben = self.game.add_player("Ben")
         assert ada is not None and ben is not None
@@ -271,7 +271,8 @@ class GameStateTests(unittest.TestCase):
         self.assertEqual(ada.health, 0.0)
         self.assertFalse(ada.alive)
         self.assertTrue(ben.alive)
-        self.assertEqual(self.game.game_status, "defeat")
+        # La derrota es compartida: con un compañero en pie la campaña sigue.
+        self.assertEqual(self.game.game_status, "playing")
         self.assertTrue(
             any(
                 event["kind"] == "eliminated" and "Ada" in event["text"]
@@ -279,16 +280,25 @@ class GameStateTests(unittest.TestCase):
             )
         )
 
-    def test_defeat_when_any_player_is_eliminated(self) -> None:
+    def test_defeat_only_when_all_players_eliminated(self) -> None:
         ada = self.game.add_player("Ada")
         ben = self.game.add_player("Ben")
         assert ada is not None and ben is not None
+
+        # Ben cae primero: la campaña cooperativa continúa.
         ben.health = BOMB_DAMAGE
+        ada.x = ben.x + BOMB_RADIUS * 3
         self._explode_bomb_on(ben)
-
         self.game.update(0.1, now=10.0)
-
         self.assertFalse(ben.alive)
+        self.assertTrue(ada.alive)
+        self.assertEqual(self.game.game_status, "playing")
+
+        # Ada también queda fuera: ahora sí es derrota compartida.
+        ada.health = BOMB_DAMAGE
+        self._explode_bomb_on(ada)
+        self.game.update(0.1, now=11.0)
+        self.assertFalse(ada.alive)
         self.assertEqual(self.game.game_status, "defeat")
         self.assertTrue(
             any(event["kind"] == "defeat" for event in self.game.events)

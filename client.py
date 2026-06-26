@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import math
+import queue
 import sys
+import threading
+import time
 import uuid
+from collections import deque
 from typing import Any
 
 try:
@@ -20,6 +24,14 @@ from sprites import SpriteManager
 
 
 FPS = 30
+
+# Parámetros de red/predicción del cliente. La capa de red corre en su propio
+# hilo para que el render nunca se bloquee esperando al servidor; el jugador
+# local usa predicción y los remotos se interpolan con un pequeño retardo.
+BASE_SPEED = 120.0  # Debe coincidir con BASE_SPEED del servidor.
+NETWORK_SEND_HZ = 30  # Frecuencia con la que se envían inputs al servidor.
+INTERP_DELAY = 0.10  # Render de jugadores remotos 100 ms en el pasado.
+RECONCILE_SNAP_DIST = 48.0  # 1.5 tiles: corrección dura (respawn/teleport).
 
 # Asocia el campo ``kind`` de los eventos del servidor con un efecto de audio.
 # Los nombres deben coincidir con los archivos de ``assets/`` (sin extensión).
@@ -123,6 +135,25 @@ class GameClient:
         self.damage_flash_until = 0
         self.last_food_event_sequence = 0
         self.faculty_index = 0
+
+        # --- Red asíncrona y predicción ---
+        self._state_lock = threading.RLock()
+        self._net_thread: threading.Thread | None = None
+        self._net_running = threading.Event()
+        self._net_error: Exception | None = None
+        self._action_queue: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue()
+        self._pending_inputs: dict[str, bool] = {
+            "up": False,
+            "down": False,
+            "left": False,
+            "right": False,
+            "sneak": False,
+        }
+        self._predicted_pos: tuple[float, float] | None = None
+        self._remote_history: deque[tuple[float, dict[str, tuple[float, float]]]] = (
+            deque(maxlen=16)
+        )
+        self._last_health: float | None = None
 
         pygame.init()
         self._configure_window_sizes()
@@ -404,6 +435,11 @@ class GameClient:
         )
         self.status_until = pygame.time.get_ticks() + 5000
 
+        own = self.state.get("players", {}).get(str(self.player_id))
+        if own:
+            self._predicted_pos = (float(own["x"]), float(own["y"]))
+            self._last_health = float(own.get("health", 100.0))
+
     def _inputs(self) -> dict[str, bool]:
         keys = pygame.key.get_pressed()
         return {
@@ -414,29 +450,189 @@ class GameClient:
             "sneak": keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT],
         }
 
-    def _exchange(self, message_type: str, payload: dict[str, Any]) -> None:
-        previous_player = self.state.get("players", {}).get(str(self.player_id), {})
-        previous_health = float(previous_player.get("health", 100))
-        response = self.network.request(
-            {
-                "type": message_type,
-                "payload": payload,
-                "request_id": self._next_request_id(),
-            }
+    def _start_network_thread(self) -> None:
+        self._net_running.set()
+        self._net_thread = threading.Thread(
+            target=self._network_loop, name="network", daemon=True
         )
+        self._net_thread.start()
+
+    def _queue_action(self, message_type: str, payload: dict[str, Any]) -> None:
+        """Encola una acción puntual (interactuar, comer, reiniciar...)."""
+        self._action_queue.put((message_type, payload))
+
+    def _network_loop(self) -> None:
+        """Envía inputs/acciones y recibe estado sin bloquear el render."""
+        interval = 1.0 / NETWORK_SEND_HZ
+        while self._net_running.is_set():
+            started = time.monotonic()
+            try:
+                try:
+                    message_type, payload = self._action_queue.get_nowait()
+                except queue.Empty:
+                    message_type, payload = "input", dict(self._pending_inputs)
+                response = self.network.request(
+                    {
+                        "type": message_type,
+                        "payload": payload,
+                        "request_id": self._next_request_id(),
+                    }
+                )
+                self._handle_response(response)
+            except NetworkError as exc:
+                self._net_error = exc
+                self._net_running.clear()
+                break
+            elapsed = time.monotonic() - started
+            if elapsed < interval:
+                time.sleep(interval - elapsed)
+
+    def _handle_response(self, response: dict[str, Any]) -> None:
         if response.get("type") != "state":
-            raise NetworkError("Respuesta inesperada del servidor.")
+            self._net_error = NetworkError("Respuesta inesperada del servidor.")
+            self._net_running.clear()
+            return
         response_payload = response.get("payload", {})
-        self.state = response_payload.get("state", self.state)
-        current_player = self.state.get("players", {}).get(str(self.player_id), {})
-        current_health = float(current_player.get("health", previous_health))
-        if current_health < previous_health:
-            self.damage_flash_until = pygame.time.get_ticks() + 260
+        new_state = response_payload.get("state")
+        if isinstance(new_state, dict):
+            now = time.monotonic()
+            positions = {
+                key: (float(p["x"]), float(p["y"]))
+                for key, p in new_state.get("players", {}).items()
+            }
+            with self._state_lock:
+                self.state = new_state
+                self._remote_history.append((now, positions))
         interaction = response_payload.get("interaction")
         if interaction:
             self.status_message = interaction["message"]
             self.status_until = pygame.time.get_ticks() + 2500
-        self._process_audio_events()
+
+    def _collides_with_wall(self, x: float, y: float) -> bool:
+        """Réplica de la colisión del servidor para predecir el movimiento."""
+        if not self.tilemap:
+            return False
+        ts = self.tile_size
+        left = int(x // ts)
+        right = int((x + PLAYER_SIZE - 1) // ts)
+        top = int(y // ts)
+        bottom = int((y + PLAYER_SIZE - 1) // ts)
+        rows = len(self.tilemap)
+        cols = len(self.tilemap[0])
+        for row in range(top, bottom + 1):
+            for col in range(left, right + 1):
+                if (
+                    row < 0
+                    or row >= rows
+                    or col < 0
+                    or col >= cols
+                    or self.tilemap[row][col] == 1
+                ):
+                    return True
+        return False
+
+    def _update_prediction(self, dt: float) -> None:
+        """Predice la posición del jugador local para ocultar la latencia."""
+        if self.player_id is None:
+            return
+        with self._state_lock:
+            player = self.state.get("players", {}).get(str(self.player_id))
+            status = self.state.get("game_status")
+        if not player:
+            self._predicted_pos = None
+            return
+
+        server_pos = (float(player["x"]), float(player["y"]))
+        alive = player.get("alive", True)
+        stunned = player.get("stun_remaining", 0) > 0
+        # Sin predicción cuando no controlamos al personaje: seguimos al servidor.
+        if (
+            self._predicted_pos is None
+            or status != "playing"
+            or not alive
+            or stunned
+        ):
+            self._predicted_pos = server_pos
+            return
+
+        px, py = self._predicted_pos
+        horizontal = int(self._pending_inputs["right"]) - int(
+            self._pending_inputs["left"]
+        )
+        vertical = int(self._pending_inputs["down"]) - int(self._pending_inputs["up"])
+
+        if horizontal or vertical:
+            length = math.hypot(horizontal, vertical)
+            multiplier = float(player.get("speed_multiplier", 1.0))
+            distance = BASE_SPEED * multiplier * min(dt, 0.1)
+            next_x = px + horizontal / length * distance
+            if not self._collides_with_wall(next_x, py):
+                px = next_x
+            next_y = py + vertical / length * distance
+            if not self._collides_with_wall(px, next_y):
+                py = next_y
+            # Corrección dura solo si la autoridad nos aleja mucho (respawn,
+            # empuje, teletransporte); si no, confiamos en la predicción.
+            if math.hypot(server_pos[0] - px, server_pos[1] - py) > RECONCILE_SNAP_DIST:
+                px, py = server_pos
+        else:
+            # Quietos: convergemos suavemente a la posición autoritativa para
+            # eliminar la deriva acumulada sin saltos bruscos.
+            factor = min(1.0, 12.0 * dt)
+            px += (server_pos[0] - px) * factor
+            py += (server_pos[1] - py) * factor
+
+        self._predicted_pos = (px, py)
+
+    def _remote_render_pos(
+        self, key: str, fallback: tuple[float, float]
+    ) -> tuple[float, float]:
+        """Interpola la posición de un jugador remoto en el pasado reciente."""
+        target = time.monotonic() - INTERP_DELAY
+        with self._state_lock:
+            history = list(self._remote_history)
+        older: tuple[float, tuple[float, float]] | None = None
+        newer: tuple[float, tuple[float, float]] | None = None
+        for timestamp, positions in history:
+            if key not in positions:
+                continue
+            if timestamp <= target:
+                older = (timestamp, positions[key])
+            else:
+                newer = (timestamp, positions[key])
+                if older is not None:
+                    break
+        if older and newer:
+            t0, p0 = older
+            t1, p1 = newer
+            span = t1 - t0
+            alpha = 0.0 if span <= 0 else max(0.0, min(1.0, (target - t0) / span))
+            return (p0[0] + (p1[0] - p0[0]) * alpha, p0[1] + (p1[1] - p0[1]) * alpha)
+        if newer:
+            return newer[1]
+        if older:
+            return older[1]
+        return fallback
+
+    def _player_render_pos(
+        self, key: str, player: dict[str, Any]
+    ) -> tuple[float, float]:
+        fallback = (float(player["x"]), float(player["y"]))
+        if self.player_id is not None and int(key) == self.player_id:
+            return self._predicted_pos or fallback
+        return self._remote_render_pos(key, fallback)
+
+    def _update_damage_flash(self) -> None:
+        """Activa el destello rojo cuando la vida del jugador local baja."""
+        if self.player_id is None:
+            return
+        own = self.state.get("players", {}).get(str(self.player_id))
+        if not own:
+            return
+        health = float(own.get("health", self._last_health or 100.0))
+        if self._last_health is not None and health < self._last_health:
+            self.damage_flash_until = pygame.time.get_ticks() + 260
+        self._last_health = health
 
     def _process_audio_events(self) -> None:
         """Reproduce un efecto por cada evento del servidor aún no escuchado."""
@@ -468,8 +664,9 @@ class GameClient:
             return
         world_width = len(self.tilemap[0]) * self.tile_size
         world_height = len(self.tilemap) * self.tile_size
-        target_x = player["x"] + PLAYER_SIZE / 2 - GAME_WIDTH / 2
-        target_y = player["y"] + PLAYER_SIZE / 2 - VIEWPORT_HEIGHT / 2
+        render_x, render_y = self._player_render_pos(str(self.player_id), player)
+        target_x = render_x + PLAYER_SIZE / 2 - GAME_WIDTH / 2
+        target_y = render_y + PLAYER_SIZE / 2 - VIEWPORT_HEIGHT / 2
         self.camera_x = max(0.0, min(target_x, max(0, world_width - GAME_WIDTH)))
         self.camera_y = max(
             0.0, min(target_y, max(0, world_height - VIEWPORT_HEIGHT))
@@ -567,7 +764,8 @@ class GameClient:
     def _draw_players(self) -> None:
         assert self.screen is not None
         for key, player in self.state.get("players", {}).items():
-            screen_x, screen_y = self._world_to_screen(player["x"], player["y"])
+            render_x, render_y = self._player_render_pos(key, player)
+            screen_x, screen_y = self._world_to_screen(render_x, render_y)
             if not (
                 -PLAYER_SIZE <= screen_x <= GAME_WIDTH
                 and -PLAYER_SIZE <= screen_y <= VIEWPORT_HEIGHT
@@ -1413,11 +1611,12 @@ class GameClient:
         if not self.show_start_screen():
             return
         self.connect()
+        self._start_network_thread()
         running = True
         while running:
-            interact = False
-            consume_chicken = False
-            restart = False
+            dt = min(self.clock.tick(FPS) / 1000.0, 0.1)
+            if self._net_error is not None:
+                raise self._net_error
             game_over = self.state.get("game_status") in {"victory", "defeat"}
             restart_rect, exit_rect = self._end_button_rects()
             for event in pygame.event.get():
@@ -1427,34 +1626,36 @@ class GameClient:
                     if event.key == pygame.K_ESCAPE:
                         running = False
                     elif self.state.get("game_status") == "lobby" and event.key == pygame.K_RETURN:
-                        self._exchange("start_game", {})
+                        self._queue_action("start_game", {})
                     elif game_over and event.key in (pygame.K_r, pygame.K_RETURN):
-                        restart = True
+                        self._queue_action("restart", {})
                     elif not game_over and event.key == pygame.K_e:
-                        interact = True
+                        self._queue_action("interact", {})
                     elif not game_over and event.key == pygame.K_q:
-                        consume_chicken = True
+                        self._queue_action("consume_chicken", {})
                 elif (
                     game_over
                     and event.type == pygame.MOUSEBUTTONDOWN
                     and event.button == 1
                 ):
                     if restart_rect.collidepoint(event.pos):
-                        restart = True
+                        self._queue_action("restart", {})
                     elif exit_rect.collidepoint(event.pos):
                         running = False
 
             if not running:
                 break
 
-            if restart:
-                self._exchange("restart", {})
-            elif consume_chicken:
-                self._exchange("consume_chicken", {})
-            elif interact:
-                self._exchange("interact", {})
-            else:
-                self._exchange("input", {} if game_over else self._inputs())
+            # El hilo de red envía estos inputs de forma continua; aquí solo
+            # publicamos los que están pulsados en este frame.
+            self._pending_inputs = (
+                {key: False for key in self._pending_inputs}
+                if game_over
+                else self._inputs()
+            )
+            self._update_prediction(dt)
+            self._process_audio_events()
+            self._update_damage_flash()
 
             assert self.screen is not None
             self._update_camera()
@@ -1481,9 +1682,13 @@ class GameClient:
             self._draw_lobby_banner()
             self._draw_end_overlay()
             pygame.display.flip()
-            self.clock.tick(FPS)
 
     def close(self) -> None:
+        # Detiene el hilo de red antes de tocar el socket para no intercalar
+        # un envío con la solicitud en curso del hilo.
+        self._net_running.clear()
+        if self._net_thread is not None:
+            self._net_thread.join(timeout=1.0)
         try:
             self.audio.stop_music()
             if self.network.connected:

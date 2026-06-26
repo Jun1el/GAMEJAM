@@ -102,6 +102,7 @@ y los estados de Karma activos para identificar al líder y al último lugar.
 
 - Cada reparación aumenta el cansancio y reduce gradualmente la velocidad.
 - En el **Comedor** puedes pulsar `E` para recoger una porción del stock
+
   compartido. Solo puedes llevar una y debes esperar 15 segundos antes de
   recoger otra; su icono es un pollo y no un router.
 - Pulsa `Q` para recuperar vida, reducir cansancio y obtener velocidad temporal.
@@ -256,7 +257,12 @@ Get-CimInstance Win32_Process |
 
 - `network.py`: protocolo TCP/IPv4 con mensajes JSON.
 - `server.py`: estado autoritativo, colisiones, routers y Karma.
-- `client.py`: interfaz, controles y renderizado con Pygame.
+- `client.py`: interfaz, controles y renderizado con Pygame. La capa de red
+  corre en un hilo aparte para que el render nunca se bloquee esperando al
+  servidor: el jugador local usa **predicción de movimiento** (se mueve al
+  instante y se reconcilia con la posición autoritativa) y los demás jugadores
+  se **interpolan** con un pequeño retardo para que se vean fluidos aun con
+  latencia. El servidor sigue siendo la autoridad final.
 - `audio.py`: carga y reproduce los efectos de sonido de `assets/`.
 - `sprites.py`: carga los iconos PNG de `assets/` (escalado y tintado) con
   respaldo al dibujo procedural cuando falta un archivo.
