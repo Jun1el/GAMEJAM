@@ -42,7 +42,8 @@ EVENT_SOUNDS = {
     "powerup": "pickup",
     "bomb": "bomb",
     "eliminated": "fail",
-    "victory": "misioncomplete",
+    "victory": "wingame",
+    "defeat": "losegame",
     "weather": "pickup",
     "slip": "fail",
 }
@@ -673,9 +674,12 @@ class GameClient:
             if "completada" in event.get("text", "").lower():
                 self.audio.play("misioncomplete")
             return
+        if kind in {"victory", "defeat"}:
+            self.audio.stop_music()
         sound = EVENT_SOUNDS.get(kind)
         if sound:
-            self.audio.play(sound)
+            volume = 0.9 if kind in {"victory", "defeat"} else 0.7
+            self.audio.play(sound, volume=volume)
 
     def _update_camera(self) -> None:
         if self.player_id is None:
