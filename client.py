@@ -674,6 +674,11 @@ class GameClient:
             if "completada" in event.get("text", "").lower():
                 self.audio.play("misioncomplete")
             return
+        if kind == "restart":
+            self.audio.stop("wingame")
+            self.audio.stop("losegame")
+            self.audio.play_music()
+            return
         if kind in {"victory", "defeat"}:
             self.audio.stop_music()
         sound = EVENT_SOUNDS.get(kind)

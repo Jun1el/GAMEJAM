@@ -70,6 +70,14 @@ class AudioManager:
         sound.set_volume(max(0.0, min(1.0, volume)))
         sound.play()
 
+    def stop(self, name: str) -> None:
+        """Detiene todas las reproducciones activas del efecto ``name``."""
+        if not self.enabled:
+            return
+        sound = self.sounds.get(name.lower())
+        if sound is not None:
+            sound.stop()
+
     def play_music(self, volume: float = 0.28) -> None:
         """Reproduce musica ambiental en bucle si existe un archivo compatible."""
         if not self.music_enabled or not self.music_path or self.music_playing:
