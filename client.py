@@ -634,6 +634,27 @@ class GameClient:
             self.damage_flash_until = pygame.time.get_ticks() + 260
         self._last_health = health
 
+    def _update_medical_audio(self) -> None:
+        local_player = self.state.get("players", {}).get(str(self.player_id))
+        if not local_player or not local_player.get("alive", True):
+            self.audio.stop_loop("audio-camara-de-recuperacion")
+            return
+        
+        facility = self._facility_state_by_name("CENTRO MEDICO")
+        if not facility:
+            self.audio.stop_loop("audio-camara-de-recuperacion")
+            return
+            
+        import math
+        dist = math.hypot(
+            local_player["x"] + 10 - (facility["col"] + 0.5) * self.tile_size,
+            local_player["y"] + 10 - (facility["row"] + 0.5) * self.tile_size
+        )
+        if dist <= 56.0:
+            self.audio.play_loop("audio-camara-de-recuperacion", volume=0.5)
+        else:
+            self.audio.stop_loop("audio-camara-de-recuperacion")
+
     def _process_audio_events(self) -> None:
         """Reproduce un efecto por cada evento del servidor aún no escuchado."""
         events = self.state.get("events", [])
@@ -1655,6 +1676,7 @@ class GameClient:
             )
             self._update_prediction(dt)
             self._process_audio_events()
+            self._update_medical_audio()
             self._update_damage_flash()
 
             assert self.screen is not None

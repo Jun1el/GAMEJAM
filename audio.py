@@ -82,6 +82,30 @@ class AudioManager:
         except pygame.error:
             self.music_path = None
 
+    def play_loop(self, name: str, volume: float = 0.7) -> None:
+        """Reproduce el efecto ``name`` en bucle continuo."""
+        if not self.enabled:
+            return
+        if not hasattr(self, "looping_channels"):
+            self.looping_channels = {}
+        if name in self.looping_channels:
+            return
+        sound = self.sounds.get(name.lower())
+        if sound is None:
+            return
+        sound.set_volume(max(0.0, min(1.0, volume)))
+        channel = sound.play(loops=-1)
+        if channel:
+            self.looping_channels[name] = channel
+
+    def stop_loop(self, name: str) -> None:
+        """Detiene un efecto que se estaba reproduciendo en bucle."""
+        if not hasattr(self, "looping_channels"):
+            return
+        channel = self.looping_channels.pop(name, None)
+        if channel:
+            channel.stop()
+
     def stop_music(self) -> None:
         """Detiene la musica de fondo si estaba sonando."""
         if not self.enabled or not self.music_playing:
