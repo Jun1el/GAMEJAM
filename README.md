@@ -5,6 +5,12 @@ Universidad Nacional de Ingeniería. Los jugadores recorren el campus para
 reparar los routers Eduroam en el momento correcto, mientras el servidor
 mantiene las posiciones, colisiones y reglas de la partida.
 
+## Integrantes
+
+- Andres Sebastian La Torre Vasquez
+- Diego Alesxander Orrego Torrejon
+- Edy Saul Serrano Arostegui
+
 ## Objetivo
 
 Completa en equipo una campaña de cuatro misiones para estabilizar Eduroam en
@@ -160,6 +166,9 @@ De 3 a 5 perros callejeros de la universidad aparecerán durmiendo plácidamente
 - **Persecución y Pánico:** Si decides correr de forma normal muy cerca de un perro, este se despertará y comenzará a perseguirte furioso. Esto te infligirá el estado de **Pánico** (obtendrás un aumento temporal del 50% en tu velocidad, pero tu cámara temblará fuertemente).
 - **El Robo:** Si un Firulais te atrapa, ¡te robará todo tu pollo a la brasa! Si no tienes pollo guardado, te morderá restándote 15 puntos de vida. Al atraparte, el perro volverá pacíficamente a su lugar de origen a seguir durmiendo.
 
+- Si la mordida deja la vida en 0, el servidor elimina correctamente al jugador
+  y aplica la derrota cuando todos quedan fuera.
+
 ### Prof. Montalvo y logros secretos
 
 El Prof. Montalvo espera cerca de CTIC. Acércate y pulsa `E` para aceptar una
@@ -205,6 +214,14 @@ El cliente reproduce efectos y una mÃºsica de fondo desde `assets/`. Si quiere
 silenciar todo usa `--no-audio`; si solo quieres quitar la mÃºsica, usa
 `--no-music`.
 
+### Audio del juego
+
+El cliente reproduce música de fondo y efectos desde `assets/`. Al ganar suena
+`wingame.wav`; al perder suena `losegame.wav`. Si reinicias después de una
+victoria o derrota, el audio final se detiene y vuelve la música de gameplay.
+Usa `--no-audio` para silenciar todo o `--no-music` para desactivar solo la
+música de fondo.
+
 ## Jugar en una red LAN
 
 1. Inicia `server.py` en la computadora que actuará como servidor.
@@ -217,6 +234,18 @@ silenciar todo usa `--no-audio`; si solo quieres quitar la mÃºsica, usa
 
 El servidor utiliza el puerto TCP `5555`. Si Windows muestra una alerta de
 firewall, permite el acceso en redes privadas.
+
+Para jugar por WiFi, todas las computadoras deben estar conectadas a la misma
+red. En la computadora que ejecuta el servidor, busca la IPv4 del adaptador WiFi,
+por ejemplo `192.168.1.35`, y úsala como `--host` desde los clientes. Si una
+computadora no conecta, prueba:
+
+```powershell
+Test-NetConnection IP_DEL_SERVIDOR -Port 5555
+```
+
+Si el puerto no responde, revisa que `server.py` siga abierto, que el firewall
+permita Python en redes privadas y que ambos equipos estén en la misma red.
 
 ## Usar otro puerto o un túnel TCP
 
@@ -253,6 +282,10 @@ Get-CimInstance Win32_Process |
 .\.venv\Scripts\python.exe -m unittest -v
 ```
 
+La suite cubre red, serialización, colisiones, misiones, pollo a la brasa,
+bombas, lluvia, Firulais, Karma, sonidos finales y reinicio de campaña.
+Actualmente incluye 49 pruebas.
+
 ## Arquitectura
 
 - `network.py`: protocolo TCP/IPv4 con mensajes JSON.
@@ -264,6 +297,8 @@ Get-CimInstance Win32_Process |
   se **interpolan** con un pequeño retardo para que se vean fluidos aun con
   latencia. El servidor sigue siendo la autoridad final.
 - `audio.py`: carga y reproduce los efectos de sonido de `assets/`.
+- `assets/wingame.wav` y `assets/losegame.wav`: audios finales de victoria y
+  derrota; al reiniciar se detienen y vuelve la música de gameplay.
 - `sprites.py`: carga los iconos PNG de `assets/` (escalado y tintado) con
   respaldo al dibujo procedural cuando falta un archivo.
 - `generate_sprites.py`: regenera los iconos PNG por código (`python
