@@ -931,7 +931,7 @@ class GameState:
                         target.chicken_contaminated = False
                         self._add_event("dog_steal", f"¡Un Firulais le robó el pollo a {target.name}!")
                     else:
-                        target.health = max(0.0, target.health - 15.0)
+                        self._damage_player(target, 15.0, now, "un Firulais")
                         self._add_event("dog_bite", f"¡Un Firulais mordió a {target.name}! (-15 Vida)")
                     dog.state = "returning"
                     dog.target_id = None

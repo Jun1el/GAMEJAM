@@ -701,6 +701,26 @@ class GameStateTests(unittest.TestCase):
         self.assertEqual(player.health, 85.0)
         self.assertEqual(dog.state, "returning")
         self.assertIsNone(dog.target_id)
+
+    def test_dog_bite_at_zero_health_eliminates_player(self) -> None:
+        self.game.dogs.clear()
+
+        dog = __import__("server").Dog(1, 100.0, 100.0, "chasing", home_x=100.0, home_y=100.0)
+        self.game.dogs[1] = dog
+
+        player = self.game.add_player("Test")
+        assert player is not None
+        dog.target_id = player.player_id
+
+        player.x, player.y = 100.0, 100.0
+        player.chicken_portions = 0
+        player.health = 15.0
+
+        self.game._update_dogs(0.1, 10.0)
+
+        self.assertEqual(player.health, 0.0)
+        self.assertFalse(player.alive)
+        self.assertEqual(self.game.game_status, "defeat")
         
     def test_dog_stops_chasing_after_3_seconds(self) -> None:
         self.game.dogs.clear()
